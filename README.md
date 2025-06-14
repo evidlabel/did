@@ -5,23 +5,23 @@ A CLI tool to anonymize Markdown files using spaCy for entity detection and rapi
 ## Features
 - Detects names, email addresses, addresses, and numbers using spaCy
 - Groups name and number variants (e.g., "John Doe", "Jon Doe"; "1234567890", "1234567") using rapidfuzz
-- Extracts entities to generate a YAML config (`did extract`)
-- Anonymizes text using YAML config (`did anonymize`)
+- Extracts entities to generate a YAML config (`did ex`)
+- Anonymizes text using YAML config (`did an`)
 - Verbose output with detected entities and replacement counts
 
 ## Installation
 ```bash
-poetry install
+uv sync
 ```
 
 ## Usage
 Extract entities:
 ```bash
-poetry run did extract -i input1.md [input2.md ...] -c config.yaml
+uv run did ex -i input1.md [input2.md ...] -c config.yaml
 ```
 Anonymize files:
 ```bash
-poetry run did anonymize -i input1.md [input2.md ...] -c config.yaml [-o output1.md [output2.md ...]]
+uv run did an -i input1.md [input2.md ...] -c config.yaml [-o output1.md [output2.md ...]]
 ```
 
 ## Configuration
@@ -40,3 +40,4 @@ numbers:
 ```
 
 For details, see the [documentation](docs/index.md).
+

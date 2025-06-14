@@ -10,19 +10,14 @@ from .anonymizer import Anonymizer
     invoke_without_command=False,
 )
 def main():
-    """Markdown Anonymizer with Presidio-based pseudonymization."""
+    """Main CLI group for Markdown Anonymizer."""
     pass
 
 
 @main.command()
-@click.argument("input_files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
-@click.option(
-    "--config",
-    "-c",
-    type=click.Path(dir_okay=False),
-    default="__config.yaml",
-)
-def extract(input_files, config):
+@click.argument('input_files', nargs=-1)
+@click.argument('config')
+def ex(input_files, config):
     """Extract entities from Markdown files and generate YAML config."""
     anonymizer = Anonymizer()
     try:
@@ -65,17 +60,11 @@ def extract(input_files, config):
 
 
 @main.command()
-@click.argument("input_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("config", type=click.Path(exists=True, dir_okay=False))
-@click.argument("output_file", type=click.Path(dir_okay=False))
-@click.option(
-    "-o",
-    "--output-dir",
-    type=click.Path(file_okay=False),
-    default="output",
-    help="Directory to save entity_mapping.json",
-)
-def anonymize(input_file, config, output_file, output_dir):
+@click.argument('input_file')
+@click.argument('config')
+@click.argument('output_file')
+@click.argument('output_dir')
+def an(input_file, config, output_file, output_dir):
     """Pseudonymize Markdown files using YAML config."""
     anonymizer = Anonymizer()
     try:
@@ -121,3 +110,4 @@ def anonymize(input_file, config, output_file, output_dir):
 
 if __name__ == "__main__":
     main()
+
