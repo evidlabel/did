@@ -1,9 +1,9 @@
 # DID (De-ID) Pseudonymizer
 
-A CLI tool to anonymize Markdown files using spaCy for entity detection and rapidfuzz for fuzzy name and number matching.
+A CLI tool to anonymize text files based on Presidio, using spaCy for entity detection and rapidfuzz for fuzzy name and number matching.
 
 ## Features
-- Detects names, email addresses, addresses, and numbers using spaCy
+- Detects names, email addresses, addresses, and numbers using Presidio with spaCy
 - Groups name and number variants (e.g., "John Doe", "Jon Doe"; "1234567890", "1234567") using rapidfuzz
 - Extracts entities to generate a YAML config (`did ex`)
 - Anonymizes text using YAML config (`did an`)
@@ -17,11 +17,11 @@ uv sync
 ## Usage
 Extract entities:
 ```bash
-uv run did ex -i input1.md [input2.md ...] -c config.yaml
+uv run did ex input1.txt [input2.txt ...] config.yaml
 ```
 Anonymize files:
 ```bash
-uv run did an -i input1.md [input2.md ...] -c config.yaml [-o output1.md [output2.md ...]]
+uv run did an input.txt config.yaml output.txt output_dir
 ```
 
 ## Configuration
@@ -40,4 +40,4 @@ numbers:
 ```
 
 For details, see the [documentation](docs/index.md).
-
+```

@@ -10,19 +10,23 @@ from .anonymizer import Anonymizer
     invoke_without_command=False,
 )
 def main():
-    """Main CLI group for Markdown Anonymizer."""
+    """DID (De-ID) Pseudonymizer - A CLI tool to anonymize text files with entity detection."""
     pass
 
 
-@main.command()
-@click.argument('input_files', nargs=-1)
-@click.argument('config')
+@main.command(help="Extract entities from input text files and generate a YAML configuration file.")
+@click.argument('input_files', nargs=-1, required=True, metavar='INPUT_FILES...')
+@click.argument('config', required=True, metavar='CONFIG_FILE')
 def ex(input_files, config):
-    """Extract entities from Markdown files and generate YAML config."""
+    """Extract entities from text files and generate YAML config.
+    
+    INPUT_FILES... : One or more input text files to analyze for entities.
+    CONFIG_FILE    : Output YAML file to store the detected entities configuration.
+    """
     anonymizer = Anonymizer()
     try:
         click.echo("=" * 20)
-        click.echo("Reading input Markdown files...")
+        click.echo("Reading input text files...")
         texts = []
         for input_file in input_files:
             with open(input_file, "r") as f:
@@ -59,13 +63,19 @@ def ex(input_files, config):
         raise click.Abort()
 
 
-@main.command()
-@click.argument('input_file')
-@click.argument('config')
-@click.argument('output_file')
-@click.argument('output_dir')
+@main.command(help="Anonymize input text file using a YAML configuration and save the result.")
+@click.argument('input_file', required=True, metavar='INPUT_FILE')
+@click.argument('config', required=True, metavar='CONFIG_FILE')
+@click.argument('output_file', required=True, metavar='OUTPUT_FILE')
+@click.argument('output_dir', required=True, metavar='OUTPUT_DIR')
 def an(input_file, config, output_file, output_dir):
-    """Pseudonymize Markdown files using YAML config."""
+    """Pseudonymize text files using YAML config.
+    
+    INPUT_FILE   : Input text file to anonymize.
+    CONFIG_FILE  : YAML configuration file with entity mappings.
+    OUTPUT_FILE  : Output file to save the anonymized text.
+    OUTPUT_DIR   : Directory to save the entity mapping JSON.
+    """
     anonymizer = Anonymizer()
     try:
         click.echo("=" * 20)
@@ -110,4 +120,3 @@ def an(input_file, config, output_file, output_dir):
 
 if __name__ == "__main__":
     main()
-
