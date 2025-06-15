@@ -112,7 +112,7 @@ def an(input_file, config, output):
         with open(output_file, 'r', encoding='utf-8') as f:
             content = f.read()
             if output_file.suffix == '.md':
-                syntax = Syntax(content, "python", theme="monokai")
+                syntax = Syntax(content, "markdown", theme="monokai")
             else:
                 syntax = Syntax(content, "text", theme="monokai")
             console.print(syntax)
