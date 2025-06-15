@@ -1,4 +1,4 @@
-"""Anonymizer class for entity detection and anonymization."""
+"""Anonymizer class for entity detection and anonymization, including Danish CPR numbers."""
 import yaml
 from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern
 from presidio_anonymizer import AnonymizerEngine, OperatorConfig
@@ -23,12 +23,15 @@ class Anonymizer:
             "numbers_replaced": 0,
             "patterns_found": 0,
             "patterns_replaced": 0,
+            "cpr_found": 0,  # Added for Danish CPR numbers
+            "cpr_replaced": 0,  # Added for Danish CPR numbers
         }
         self.entities = {
             "names": [],
             "emails": [],
             "addresses": [],
             "numbers": [],
+            "cpr": [],  # Added for Danish CPR numbers
         }
         # Add custom patterns
         address_pattern = Pattern(
@@ -39,11 +42,17 @@ class Anonymizer:
         number_pattern = Pattern(
             name="NUMBER_PATTERN", regex=r"\b\d{2}\s+\d{2}\s+\d{2}\s+\d{2}\b", score=0.8
         )
+        cpr_pattern = Pattern(  # Added for Danish CPR numbers
+            name="CPR_NUMBER", regex=r"\b\d{6}-\d{4}\b", score=0.95
+        )
         self.analyzer.registry.add_recognizer(
             PatternRecognizer(supported_entity="ADDRESS", patterns=[address_pattern])
         )
         self.analyzer.registry.add_recognizer(
             PatternRecognizer(supported_entity="NUMBER_PATTERN", patterns=[number_pattern])
+        )
+        self.analyzer.registry.add_recognizer(  # Added for Danish CPR numbers
+            PatternRecognizer(supported_entity="CPR_NUMBER", patterns=[cpr_pattern])
         )
 
     def detect_entities(self, texts: list):
@@ -52,17 +61,19 @@ class Anonymizer:
         email_count = 1
         address_count = 1
         number_count = 1
+        cpr_count = 1  # Added for Danish CPR numbers
 
         all_names = []
         all_emails = []
         all_addresses = []
         all_numbers = []
         pattern_matches = []
+        all_cpr = []  # Added for Danish CPR numbers
 
         for text in texts:
             results = self.analyzer.analyze(
                 text=text,
-                entities=["PERSON", "EMAIL_ADDRESS", "ADDRESS", "PHONE_NUMBER", "NUMBER_PATTERN"],
+                entities=["PERSON", "EMAIL_ADDRESS", "ADDRESS", "PHONE_NUMBER", "NUMBER_PATTERN", "CPR_NUMBER"],  # Added CPR_NUMBER
                 language="en",
             )
             for result in results:
@@ -82,6 +93,9 @@ class Anonymizer:
                     if result.entity_type == "NUMBER_PATTERN":
                         pattern_matches.append(entity_text)
                         self.counts["patterns_found"] += 1
+                elif result.entity_type == "CPR_NUMBER" and entity_text not in all_cpr:  # Added for Danish CPR numbers
+                    all_cpr.append(entity_text)
+                    self.counts["cpr_found"] += 1  # Added for Danish CPR numbers
 
         # Group names
         grouped_names = find_name_variants(all_names)
@@ -108,6 +122,11 @@ class Anonymizer:
             self.entities["numbers"].append(entry)
             number_count += 1
 
+        # Group CPR numbers  # Added for Danish CPR numbers
+        for cpr in all_cpr:
+            self.entities["cpr"].append({"id": f"<CPR_{cpr_count}>", "variants": [cpr]})
+            cpr_count += 1  # Added for Danish CPR numbers
+
     def generate_yaml(self) -> str:
         """Generate YAML configuration from detected entities."""
         config = {
@@ -115,6 +134,7 @@ class Anonymizer:
             "emails": self.entities["emails"],
             "addresses": self.entities["addresses"],
             "numbers": self.entities["numbers"],
+            "cpr": self.entities["cpr"],  # Added for Danish CPR numbers
         }
         return yaml.dump(config, sort_keys=False)
 
@@ -124,6 +144,7 @@ class Anonymizer:
         self.entities["emails"] = config.get("emails", [])
         self.entities["addresses"] = config.get("addresses", [])
         self.entities["numbers"] = config.get("numbers", [])
+        self.entities["cpr"] = config.get("cpr", [])  # Added for Danish CPR numbers
 
         for entry in self.entities["names"]:
             self.entity_mapping.setdefault("PERSON", {})
@@ -144,6 +165,10 @@ class Anonymizer:
                 self.entity_mapping["PHONE_NUMBER"][variant] = entry["id"]
                 if entry.get("pattern"):
                     self.entity_mapping["NUMBER_PATTERN"][variant] = entry["id"]
+        for entry in self.entities["cpr"]:  # Added for Danish CPR numbers
+            self.entity_mapping.setdefault("CPR_NUMBER", {})
+            for variant in entry["variants"]:
+                self.entity_mapping["CPR_NUMBER"][variant] = entry["id"]
 
     def anonymize(self, text: str) -> tuple:
         """Pseudonymize a single text using Presidio."""
@@ -158,11 +183,13 @@ class Anonymizer:
             "numbers_replaced": 0,
             "patterns_found": 0,
             "patterns_replaced": 0,
+            "cpr_found": 0,  # Added for Danish CPR numbers
+            "cpr_replaced": 0,  # Added for Danish CPR numbers
         }
 
         results = self.analyzer.analyze(
             text=text,
-            entities=["PERSON", "EMAIL_ADDRESS", "ADDRESS", "PHONE_NUMBER", "NUMBER_PATTERN"],
+            entities=["PERSON", "EMAIL_ADDRESS", "ADDRESS", "PHONE_NUMBER", "NUMBER_PATTERN", "CPR_NUMBER"],  # Added CPR_NUMBER
             language="en",
         )
 
@@ -177,6 +204,8 @@ class Anonymizer:
                 self.counts["numbers_found"] += 1
                 if result.entity_type == "NUMBER_PATTERN":
                     self.counts["patterns_found"] += 1
+            elif result.entity_type == "CPR_NUMBER":  # Added for Danish CPR numbers
+                self.counts["cpr_found"] += 1  # Added for Danish CPR numbers
 
         anonymized_result = self.anonymizer.anonymize(
             text,
@@ -194,5 +223,7 @@ class Anonymizer:
             self.counts["numbers_replaced"] += anonymized_result.text.count(entry["id"])
             if entry.get("pattern"):
                 self.counts["patterns_replaced"] += anonymized_result.text.count(entry["id"])
+        for entry in self.entities["cpr"]:  # Added for Danish CPR numbers
+            self.counts["cpr_replaced"] += anonymized_result.text.count(entry["id"])  # Added for Danish CPR numbers
 
         return anonymized_result.text, self.counts

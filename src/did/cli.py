@@ -4,7 +4,8 @@ import yaml
 import rich
 from rich.console import Console
 from rich.syntax import Syntax
-from .core.anonymizer import Anonymizer  # Assuming the import path is correct
+from .core.anonymizer import Anonymizer
+from pathlib import Path
 
 @click.group(
     context_settings={"help_option_names": ["-h", "--help"]},
@@ -18,11 +19,7 @@ def main():
 @click.argument('input_files', nargs=-1, required=True, metavar='INPUT_FILES...')
 @click.argument('config', required=True, metavar='CONFIG_FILE')
 def ex(input_files, config):
-    """Extract entities from text files and generate YAML config.
-
-    INPUT_FILES... : One or more input text files to analyze for entities.
-    CONFIG_FILE    : Output YAML file to store the detected entities configuration.
-    """
+    """Extract entities from text files and generate YAML config."""
     anonymizer = Anonymizer()
     try:
         click.echo("=" * 20)
@@ -41,6 +38,7 @@ def ex(input_files, config):
         click.echo(f"  Addresses found: {anonymizer.counts['addresses_found']}")
         click.echo(f"  Numbers found: {anonymizer.counts['numbers_found']}")
         click.echo(f"  Number patterns found: {anonymizer.counts['patterns_found']}")
+        click.echo(f"  CPR found: {anonymizer.counts['cpr_found']}")  # Added for Danish CPR numbers
 
         yaml_str = anonymizer.generate_yaml()
         click.echo("Writing YAML config...")
@@ -75,12 +73,7 @@ def ex(input_files, config):
 @click.argument('config', required=True, metavar='CONFIG_FILE')
 @click.argument('output_file', required=True, metavar='OUTPUT_FILE')
 def an(input_file, config, output_file):
-    """Pseudonymize text files using YAML config.
-
-    INPUT_FILE   : Input text file to anonymize.
-    CONFIG_FILE  : YAML configuration file with entity mappings.
-    OUTPUT_FILE  : Output file to save the anonymized text.
-    """
+    """Pseudonymize text files using YAML config."""
     anonymizer = Anonymizer()
     try:
         click.echo("=" * 20)
@@ -101,10 +94,22 @@ def an(input_file, config, output_file):
         click.echo(f"  Addresses replaced: {counts['addresses_replaced']}")
         click.echo(f"  Numbers replaced: {counts['numbers_replaced']}")
         click.echo(f"  Number patterns replaced: {counts['patterns_replaced']}")
+        click.echo(f"  CPR replaced: {counts['cpr_replaced']}")  # Added for Danish CPR numbers
 
+        output_file = Path(output_file)
         click.echo(f"Writing to {output_file}...")
         with open(output_file, "w") as f:
             f.write(result)
+
+        # Print the output file with Rich syntax highlighting
+        console = Console()
+        with open(output_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+            if output_file.suffix == '.md':
+                syntax = Syntax(content, "python", theme="monokai")
+            else:
+                syntax = Syntax(content, "text", theme="monokai")
+            console.print(syntax)
 
         click.echo("=" * 20)
 
