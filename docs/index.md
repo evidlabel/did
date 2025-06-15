@@ -5,7 +5,7 @@ A CLI tool to anonymize text files based on Presidio, with spaCy-based entity de
 ## Getting Started
 1. Install the tool: `uv sync`
 2. Extract entities: `uv run did ex input1.txt [input2.txt ...] config.yaml`
-3. Anonymize files: `uv run did an input.txt config.yaml output.txt output_dir`
+3. Anonymize files: `uv run did an input.txt config.yaml output.txt`
 4. View output in text editor.
 
 ## Features
@@ -55,10 +55,10 @@ You can manually edit this YAML file to customize replacement IDs or patterns be
 ### Step 2: Anonymization
 After generating or editing the configuration file, use the `did an` command to anonymize the input file based on the YAML config. For example:
 ```bash
-uv run did an examples/test_document.md examples/__temp.yaml examples/gaai.md examples/output
+uv run did an examples/test_document.md examples/__temp.yaml examples/gaai.md
 ```
 
-This command reads the entities and replacement rules from `__temp.yaml` and replaces detected entities in `test_document.md` with their corresponding IDs (e.g., `<PERSON_1>`, `<NUMBER_1>`). The anonymized output is saved to `gaai.md`, and the entity mapping is saved to the specified output directory.
+This command reads the entities and replacement rules from `__temp.yaml` and replaces detected entities in `test_document.md` with their corresponding IDs (e.g., `<PERSON_1>`, `<NUMBER_1>`). The anonymized output is saved to `gaai.md`.
 
 ### Step 3: Review Anonymized Output
 Open the output file (`examples/gaai.md`) in a text editor to verify the anonymization. For instance, the line:
@@ -74,17 +74,23 @@ This workflow ensures that sensitive information is consistently replaced across
 
 ## Configuration
 Generated `config.yaml` example:
+
 ```yaml
 names:
-  - { id: person1, variants: ["John Doe", "Jon Doe"] }
-  - { id: person2, variants: ["Jane Smith", "Jane Smyth"] }
+  - id: <PERSON_1>
+    variants: ["John Doe", "Jon Doe", "john DOE"]
+  - id: <PERSON_2>
+    variants: ["Jane Smith", "Jane Smyth"]
 emails:
-  example@email.com: Email1
+  - id: <EMAIL_1>
+    variants: ["john.doe@example.com"]
 addresses:
-  "123 One Street, Springfield, US": Address1
+  - id: <ADDRESS_1>
+    variants: ["123 One Street, Springfield, US"]
 numbers:
-  - { id: number1, variants: ["1234567890", "1234567"] }
-  - { id: number2, variants: ["12 34 56 78"], pattern: "\\d{2}\\s+\\d{2}\\s+\\d{2}\\s+\\d{2}" }
+  - id: <NUMBER_1>
+    variants: ["1234567890", "12 34 56 78"]
+    pattern: "\\b\\d{2}\\s+\\d{2}\\s+\\d{2}\\s+\\d{2}\\b"
 ```
 
 ## Testing

@@ -98,7 +98,6 @@ def test_cli_extract(runner, tmp_path):
     input_file = tmp_path / "input.md"
     config_file = tmp_path / "config.yaml"
     input_file.write_text("Hello John Doe and Jon Doe, Account: 1234567890")
-    input_files.close()
     result = runner.invoke(main, ["ex", str(input_file), str(config_file)])
     # assert result.exit_code == 0
     assert "Names found: 3" in result.output
@@ -116,8 +115,6 @@ def test_cli_anonymize(runner, tmp_path):
     input_file.write_text("Hello John Doe and Jon Doe")
 
     # First extract to generate config
-   
-
     print(f"{input_file} {config_file}")
     runner.invoke(main, ["ex", str(input_file), str(config_file)])
 

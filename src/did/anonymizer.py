@@ -231,8 +231,8 @@ class Anonymizer:
                 if entry.get("pattern"):
                     self.entity_mapping["NUMBER_PATTERN"][variant] = entry["id"]
 
-    def anonymize(self, text: str, output_dir: str = None) -> tuple:
-        """Pseudonymize a single text using Presidio and save entity_mapping."""
+    def anonymize(self, text: str) -> tuple:
+        """Pseudonymize a single text using Presidio."""
         self.counts = {
             "names_found": 0,
             "names_replaced": 0,
@@ -291,11 +291,5 @@ class Anonymizer:
             self.counts["numbers_replaced"] += anonymized_result.text.count(entry["id"])
             if entry.get("pattern"):
                 self.counts["patterns_replaced"] += anonymized_result.text.count(entry["id"])
-
-        # Save entity_mapping if output_dir is provided
-        if output_dir:
-            Path(output_dir).mkdir(exist_ok=True)
-            with open(Path(output_dir) / "entity_mapping.json", "w") as f:
-                json.dump(self.entity_mapping, f, indent=2)
 
         return anonymized_result.text, self.counts

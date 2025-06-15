@@ -1,6 +1,5 @@
 import click
 import yaml
-import json
 from pathlib import Path
 from .anonymizer import Anonymizer
 
@@ -67,14 +66,12 @@ def ex(input_files, config):
 @click.argument('input_file', required=True, metavar='INPUT_FILE')
 @click.argument('config', required=True, metavar='CONFIG_FILE')
 @click.argument('output_file', required=True, metavar='OUTPUT_FILE')
-@click.argument('output_dir', required=True, metavar='OUTPUT_DIR')
-def an(input_file, config, output_file, output_dir):
+def an(input_file, config, output_file):
     """Pseudonymize text files using YAML config.
     
     INPUT_FILE   : Input text file to anonymize.
     CONFIG_FILE  : YAML configuration file with entity mappings.
     OUTPUT_FILE  : Output file to save the anonymized text.
-    OUTPUT_DIR   : Directory to save the entity mapping JSON.
     """
     anonymizer = Anonymizer()
     try:
@@ -88,7 +85,7 @@ def an(input_file, config, output_file, output_dir):
         with open(input_file, "r") as f:
             text = f.read()
 
-        result, counts = anonymizer.anonymize(text, output_dir=output_dir)
+        result, counts = anonymizer.anonymize(text)
 
         click.echo("Replacement counts:")
         click.echo(f"  Names replaced: {counts['names_replaced']}")
@@ -101,7 +98,6 @@ def an(input_file, config, output_file, output_dir):
         with open(output_file, "w") as f:
             f.write(result)
 
-        click.echo(f"Entity mapping saved to {output_dir}/entity_mapping.json")
         click.echo("=" * 20)
 
     except FileNotFoundError as e:
