@@ -3,6 +3,7 @@ import yaml
 from did.core.anonymizer import Anonymizer
 from click.testing import CliRunner
 from did.cli import main
+
 """Tests for the Anonymizer."""
 
 
@@ -101,11 +102,14 @@ def test_anonymize_mixed_content(anonymizer):
 
     print(result)
 
+
 @pytest.mark.skip("fails")
 def test_cli_extract(runner, tmp_path):
     input_file = tmp_path / "input.md"
     config_file = tmp_path / "config.yaml"
-    input_file.write_text("Hello John Doe and Jon Doe, Account: 1234567890, CPR: 123456-1234")
+    input_file.write_text(
+        "Hello John Doe and Jon Doe, Account: 1234567890, CPR: 123456-1234"
+    )
     result = runner.invoke(main, ["ex", str(input_file), str(config_file)])
     assert "Names found: 3" in result.output
     assert "CPR found: 1" in result.output  # Added for Danish CPR numbers
@@ -113,7 +117,10 @@ def test_cli_extract(runner, tmp_path):
     with open(config_file, "r") as f:
         config = yaml.safe_load(f)
         assert len(config["names"]) >= 1
-        assert any("123456-1234" in entry["variants"] for entry in config["cpr"])  # Added for Danish CPR numbers
+        assert any(
+            "123456-1234" in entry["variants"] for entry in config["cpr"]
+        )  # Added for Danish CPR numbers
+
 
 @pytest.mark.skip("fails")
 def test_cli_anonymize(runner, tmp_path):

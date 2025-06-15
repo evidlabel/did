@@ -1,5 +1,7 @@
 """Utility functions for entity processing."""
+
 from rapidfuzz import fuzz
+
 
 def normalize_name(name: str) -> str:
     """Normalize a name for comparison."""
@@ -12,9 +14,11 @@ def normalize_name(name: str) -> str:
         .replace("\n", " ")
     )
 
+
 def normalize_number(number: str) -> str:
     """Normalize a number for comparison."""
     return number.replace(" ", "").replace("-", "")
+
 
 def is_valid_name(name: str) -> bool:
     """Check if a string is a valid name."""
@@ -22,8 +26,12 @@ def is_valid_name(name: str) -> bool:
     return (
         1 <= len(words) <= 3
         and all(any(c.isalpha() for c in word) for word in words)
-        and not any(word.lower() in ["multiline", "phone", "account", "code", "street"] for word in words)
+        and not any(
+            word.lower() in ["multiline", "phone", "account", "code", "street"]
+            for word in words
+        )
     )
+
 
 def find_name_variants(names: list, threshold: float = 85) -> list:
     """Group similar names using rapidfuzz."""
@@ -49,6 +57,7 @@ def find_name_variants(names: list, threshold: float = 85) -> list:
             grouped_names.append(variants)
     return grouped_names
 
+
 def find_number_variants(numbers: list, threshold: float = 80) -> list:
     """Group similar numbers using rapidfuzz."""
     if not numbers:
@@ -62,7 +71,9 @@ def find_number_variants(numbers: list, threshold: float = 80) -> list:
         processed.add(number)
         for other_number in numbers:
             if other_number not in processed:
-                score = fuzz.ratio(normalize_number(number), normalize_number(other_number))
+                score = fuzz.ratio(
+                    normalize_number(number), normalize_number(other_number)
+                )
                 if score > threshold:
                     variants.append(other_number)
                     processed.add(other_number)

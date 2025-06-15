@@ -1,8 +1,10 @@
 from typing import Dict
 from presidio_anonymizer.operators import Operator, OperatorType
 
+
 class InstanceCounterAnonymizer(Operator):
     """Anonymizer that replaces entity values with unique identifiers per entity type."""
+
     REPLACING_FORMAT = "<{entity_type}_{index}>"
 
     def operate(self, text: str, params: Dict = None) -> str:
