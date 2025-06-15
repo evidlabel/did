@@ -4,8 +4,9 @@ import yaml
 import rich
 from rich.console import Console
 from rich.syntax import Syntax
-from .core.anonymizer import Anonymizer
 from pathlib import Path
+from .file_utils import extract_text  # Import to handle file-specific extraction
+from .core.anonymizer import Anonymizer
 
 @click.group(
     context_settings={"help_option_names": ["-h", "--help"]},
@@ -17,20 +18,23 @@ def main():
 
 @main.command(help="Extract entities from input text files and generate a YAML configuration file.")
 @click.argument('input_files', nargs=-1, required=True, metavar='INPUT_FILES...')
-@click.argument('config', required=True, metavar='CONFIG_FILE')
+@click.option('--config',"-c", default='__temp.yaml', help="Output YAML config file")
 def ex(input_files, config):
     """Extract entities from text files and generate YAML config."""
     anonymizer = Anonymizer()
+    console = Console()  # Initialize Rich console for status and output
     try:
         click.echo("=" * 20)
         click.echo("Reading input text files...")
         texts = []
         for input_file in input_files:
-            with open(input_file, "r") as f:
-                texts.append(f.read())
+            file_path = Path(input_file)
+            text = extract_text(file_path)  # Use extract_text to get body text
+            texts.append(text)
 
         click.echo("Detecting entities...")
-        anonymizer.detect_entities(texts)
+        with console.status("[bold green]Detecting entities...[/bold green]"):  # Add Rich wait graphics
+            anonymizer.detect_entities(texts)
 
         click.echo("Detected entities:")
         click.echo(f"  Names found: {anonymizer.counts['names_found']}")
@@ -48,7 +52,6 @@ def ex(input_files, config):
         click.echo(f"Config written to {config}")
 
         # Print YAML with Rich syntax highlighting
-        console = Console()
         syntax = Syntax(yaml_str, "yaml")
         console.print(syntax)
 
@@ -71,10 +74,13 @@ def ex(input_files, config):
 @main.command(help="Anonymize input text file using a YAML configuration and save the result.")
 @click.argument('input_file', required=True, metavar='INPUT_FILE')
 @click.argument('config', required=True, metavar='CONFIG_FILE')
-@click.argument('output_file', required=True, metavar='OUTPUT_FILE')
-def an(input_file, config, output_file):
+@click.option('--output', default=None, help="Output file path")
+def an(input_file, config, output):
     """Pseudonymize text files using YAML config."""
     anonymizer = Anonymizer()
+    if output is None:
+        input_path = Path(input_file)
+        output = str(input_path.parent / (input_path.stem + "_anon" + input_path.suffix))  # Default to filename_anon.suffix
     try:
         click.echo("=" * 20)
         click.echo("Loading config...")
@@ -96,7 +102,7 @@ def an(input_file, config, output_file):
         click.echo(f"  Number patterns replaced: {counts['patterns_replaced']}")
         click.echo(f"  CPR replaced: {counts['cpr_replaced']}")  # Added for Danish CPR numbers
 
-        output_file = Path(output_file)
+        output_file = Path(output)
         click.echo(f"Writing to {output_file}...")
         with open(output_file, "w") as f:
             f.write(result)
