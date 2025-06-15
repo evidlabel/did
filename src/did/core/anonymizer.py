@@ -1,11 +1,9 @@
-import re
+"""Anonymizer class for entity detection and anonymization."""
 import yaml
-import json
-from pathlib import Path
-from rapidfuzz import fuzz
 from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern
 from presidio_anonymizer import AnonymizerEngine, OperatorConfig
-from .operators import InstanceCounterAnonymizer
+from ..operators import InstanceCounterAnonymizer
+from ..utils import find_name_variants, find_number_variants
 
 class Anonymizer:
     def __init__(self):
@@ -27,10 +25,10 @@ class Anonymizer:
             "patterns_replaced": 0,
         }
         self.entities = {
-            "names": [],  # List of {id: str, variants: list}
-            "emails": [],  # List of {id: str, variants: list}
-            "addresses": [],  # List of {id: str, variants: list}
-            "numbers": [],  # List of {id: str, variants: list, pattern: str (optional)}
+            "names": [],
+            "emails": [],
+            "addresses": [],
+            "numbers": [],
         }
         # Add custom patterns
         address_pattern = Pattern(
@@ -45,85 +43,8 @@ class Anonymizer:
             PatternRecognizer(supported_entity="ADDRESS", patterns=[address_pattern])
         )
         self.analyzer.registry.add_recognizer(
-            PatternRecognizer(
-                supported_entity="NUMBER_PATTERN", patterns=[number_pattern]
-            )
+            PatternRecognizer(supported_entity="NUMBER_PATTERN", patterns=[number_pattern])
         )
-
-    def normalize_name(self, name: str) -> str:
-        """Normalize a name for comparison."""
-        return (
-            name.lower()
-            .replace("å", "aa")
-            .replace("æ", "ae")
-            .replace("ø", "oe")
-            .replace("-", "")
-            .replace("\n", " ")
-        )
-
-    def normalize_number(self, number: str) -> str:
-        """Normalize a number for comparison."""
-        return number.replace(" ", "").replace("-", "")
-
-    def is_valid_name(self, name: str) -> bool:
-        """Check if a string is a valid name (alphabetic, resembles proper name)."""
-        words = name.strip().split()
-        return (
-            1 <= len(words) <= 3
-            and all(any(c.isalpha() for c in word) for word in words)
-            and not any(word.lower() in ["multiline", "phone", "account", "code", "street"] for word in words)
-        )
-
-    def find_name_variants(self, names: list, threshold: float = 85) -> list:
-        """Group similar names using rapidfuzz."""
-        if not names:
-            return []
-        valid_names = [name for name in names if self.is_valid_name(name)]
-        if not valid_names:
-            return []
-        grouped_names = []
-        processed = set()
-
-        for name in valid_names:
-            if name in processed:
-                continue
-            variants = [name]
-            processed.add(name)
-            for other_name in valid_names:
-                if other_name not in processed:
-                    score = fuzz.ratio(self.normalize_name(name), self.normalize_name(other_name))
-                    if score > threshold:
-                        variants.append(other_name)
-                        processed.add(other_name)
-                        self.counts["names_found"] += 1
-            if variants:
-                grouped_names.append(variants)
-
-        return grouped_names
-
-    def find_number_variants(self, numbers: list, threshold: float = 80) -> list:
-        """Group similar numbers using rapidfuzz."""
-        if not numbers:
-            return []
-        grouped_numbers = []
-        processed = set()
-
-        for number in numbers:
-            if number in processed:
-                continue
-            variants = [number]
-            processed.add(number)
-            for other_number in numbers:
-                if other_number not in processed:
-                    score = fuzz.ratio(self.normalize_number(number), self.normalize_number(other_number))
-                    if score > threshold:
-                        variants.append(other_number)
-                        processed.add(other_number)
-                        self.counts["numbers_found"] += 1
-            if variants:
-                grouped_numbers.append(variants)
-
-        return grouped_numbers
 
     def detect_entities(self, texts: list):
         """Detect entities in multiple texts using Presidio."""
@@ -141,13 +62,7 @@ class Anonymizer:
         for text in texts:
             results = self.analyzer.analyze(
                 text=text,
-                entities=[
-                    "PERSON",
-                    "EMAIL_ADDRESS",
-                    "ADDRESS",
-                    "PHONE_NUMBER",
-                    "NUMBER_PATTERN",
-                ],
+                entities=["PERSON", "EMAIL_ADDRESS", "ADDRESS", "PHONE_NUMBER", "NUMBER_PATTERN"],
                 language="en",
             )
             for result in results:
@@ -169,7 +84,7 @@ class Anonymizer:
                         self.counts["patterns_found"] += 1
 
         # Group names
-        grouped_names = self.find_name_variants(all_names)
+        grouped_names = find_name_variants(all_names)
         for variants in grouped_names:
             self.entities["names"].append({"id": f"<PERSON_{name_count}>", "variants": variants})
             name_count += 1
@@ -185,7 +100,7 @@ class Anonymizer:
             address_count += 1
 
         # Group numbers
-        grouped_numbers = self.find_number_variants(all_numbers)
+        grouped_numbers = find_number_variants(all_numbers)
         for variants in grouped_numbers:
             entry = {"id": f"<NUMBER_{number_count}>", "variants": variants}
             if any(v in pattern_matches for v in variants):
@@ -210,7 +125,6 @@ class Anonymizer:
         self.entities["addresses"] = config.get("addresses", [])
         self.entities["numbers"] = config.get("numbers", [])
 
-        # Populate entity_mapping for pseudonymization
         for entry in self.entities["names"]:
             self.entity_mapping.setdefault("PERSON", {})
             for variant in entry["variants"]:
@@ -248,13 +162,7 @@ class Anonymizer:
 
         results = self.analyzer.analyze(
             text=text,
-            entities=[
-                "PERSON",
-                "EMAIL_ADDRESS",
-                "ADDRESS",
-                "PHONE_NUMBER",
-                "NUMBER_PATTERN",
-            ],
+            entities=["PERSON", "EMAIL_ADDRESS", "ADDRESS", "PHONE_NUMBER", "NUMBER_PATTERN"],
             language="en",
         )
 
@@ -273,14 +181,9 @@ class Anonymizer:
         anonymized_result = self.anonymizer.anonymize(
             text,
             results,
-            {
-                "DEFAULT": OperatorConfig(
-                    "entity_counter", {"entity_mapping": self.entity_mapping}
-                )
-            },
+            {"DEFAULT": OperatorConfig("entity_counter", {"entity_mapping": self.entity_mapping})},
         )
 
-        # Count replacements
         for entry in self.entities["names"]:
             self.counts["names_replaced"] += anonymized_result.text.count(entry["id"])
         for entry in self.entities["emails"]:

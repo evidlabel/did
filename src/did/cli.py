@@ -1,8 +1,10 @@
+"""CLI interface for the DID tool."""
 import click
 import yaml
-from pathlib import Path
-from .anonymizer import Anonymizer
-
+import rich
+from rich.console import Console
+from rich.syntax import Syntax
+from .core.anonymizer import Anonymizer  # Assuming the import path is correct
 
 @click.group(
     context_settings={"help_option_names": ["-h", "--help"]},
@@ -12,13 +14,12 @@ def main():
     """DID (De-ID) Pseudonymizer - A CLI tool to anonymize text files with entity detection."""
     pass
 
-
 @main.command(help="Extract entities from input text files and generate a YAML configuration file.")
 @click.argument('input_files', nargs=-1, required=True, metavar='INPUT_FILES...')
 @click.argument('config', required=True, metavar='CONFIG_FILE')
 def ex(input_files, config):
     """Extract entities from text files and generate YAML config.
-    
+
     INPUT_FILES... : One or more input text files to analyze for entities.
     CONFIG_FILE    : Output YAML file to store the detected entities configuration.
     """
@@ -41,11 +42,18 @@ def ex(input_files, config):
         click.echo(f"  Numbers found: {anonymizer.counts['numbers_found']}")
         click.echo(f"  Number patterns found: {anonymizer.counts['patterns_found']}")
 
+        yaml_str = anonymizer.generate_yaml()
         click.echo("Writing YAML config...")
         with open(config, "w") as f:
-            f.write(anonymizer.generate_yaml())
+            f.write(yaml_str)
 
         click.echo(f"Config written to {config}")
+
+        # Print YAML with Rich syntax highlighting
+        console = Console()
+        syntax = Syntax(yaml_str, "yaml")
+        console.print(syntax)
+
         click.echo("=" * 20)
 
     except FileNotFoundError as e:
@@ -68,7 +76,7 @@ def ex(input_files, config):
 @click.argument('output_file', required=True, metavar='OUTPUT_FILE')
 def an(input_file, config, output_file):
     """Pseudonymize text files using YAML config.
-    
+
     INPUT_FILE   : Input text file to anonymize.
     CONFIG_FILE  : YAML configuration file with entity mappings.
     OUTPUT_FILE  : Output file to save the anonymized text.

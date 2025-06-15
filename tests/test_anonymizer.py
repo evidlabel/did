@@ -1,8 +1,9 @@
 import pytest
 import yaml
-from did.anonymizer import Anonymizer
+from did.core.anonymizer import Anonymizer
 from click.testing import CliRunner
 from did.cli import main
+"""Tests for the Anonymizer."""
 
 
 @pytest.fixture

@@ -1,12 +1,13 @@
 # DID (De-ID) Pseudonymizer
 
-A CLI tool to anonymize text files based on Presidio, using spaCy for entity detection and rapidfuzz for fuzzy name and number matching.
+A CLI tool to anonymize text, Markdown, TeX, and BibTeX files based on Presidio, using spaCy for entity detection and rapidfuzz for fuzzy name and number matching.
 
 ## Features
 - Detects names, email addresses, addresses, and numbers using Presidio with spaCy
 - Groups name and number variants (e.g., "John Doe", "Jon Doe"; "1234567890", "1234567") using rapidfuzz
 - Extracts entities to generate a YAML config (`did ex`)
-- Anonymizes text using YAML config (`did an`)
+- Anonymizes text using YAML config (`did an`), preserving file formats (e.g., .bib to .bib)
+- Supports Markdown (.md), plain text (.txt), TeX (.tex), and BibTeX (.bib) files
 - Verbose output with detected entities and replacement counts
 
 ## Installation
@@ -26,7 +27,6 @@ uv run did an input.txt config.yaml output.txt
 
 ## Configuration
 Generated `config.yaml` example:
-
 ```yaml
 names:
   - id: <PERSON_1>
