@@ -5,7 +5,7 @@ from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern
 from presidio_anonymizer import AnonymizerEngine, OperatorConfig
 from ..operators import InstanceCounterAnonymizer
 from ..utils import find_name_variants, find_number_variants
-
+from .models import Config, Entity  # Import Pydantic models
 
 class Anonymizer:
     def __init__(self, language="en"):
@@ -28,13 +28,7 @@ class Anonymizer:
             "cpr_found": 0,
             "cpr_replaced": 0,
         }
-        self.entities = {
-            "names": [],
-            "emails": [],
-            "addresses": [],
-            "numbers": [],
-            "cpr": [],
-        }
+        self.entities: Config = Config()  # Use Pydantic Config model
         address_pattern = Pattern(
             name="US_ADDRESS",
             regex=r"\d{1,5}\s[A-Za-z]+(?:\s[A-Za-z]+)*,\s*[A-Za-z]+,\s*[A-Z]{2}\b",
@@ -80,9 +74,7 @@ class Anonymizer:
                     "NUMBER_PATTERN",
                     "CPR_NUMBER",
                 ],
-                language=self.analyzer.supported_languages[
-                    0
-                ],  # Use configured language
+                language=self.analyzer.supported_languages[0],
             )
             for result in results:
                 entity_text = text[result.start : result.end]
@@ -90,8 +82,7 @@ class Anonymizer:
                     all_names.append(entity_text)
                     self.counts["names_found"] += 1
                 elif (
-                    result.entity_type == "EMAIL_ADDRESS"
-                    and entity_text not in all_emails
+                    result.entity_type == "EMAIL_ADDRESS" and entity_text not in all_emails
                 ):
                     all_emails.append(entity_text)
                     self.counts["emails_found"] += 1
@@ -114,50 +105,37 @@ class Anonymizer:
                     self.counts["cpr_found"] += 1
         grouped_names = find_name_variants(all_names)
         for variants in grouped_names:
-            self.entities["names"].append(
-                {"id": f"<PERSON_{name_count}>", "variants": variants}
-            )
+            self.entities.names.append(Entity(id=f"<PERSON_{name_count}>", variants=variants))
             name_count += 1
         for email in all_emails:
-            self.entities["emails"].append(
-                {"id": f"<EMAIL_{email_count}>", "variants": [email]}
-            )
+            self.entities.emails.append(Entity(id=f"<EMAIL_{email_count}>", variants=[email]))
             email_count += 1
         for address in all_addresses:
-            self.entities["addresses"].append(
-                {"id": f"<ADDRESS_{address_count}>", "variants": [address]}
-            )
+            self.entities.addresses.append(Entity(id=f"<ADDRESS_{address_count}>", variants=[address]))
             address_count += 1
         grouped_numbers = find_number_variants(all_numbers)
         for variants in grouped_numbers:
-            entry = {"id": f"<NUMBER_{number_count}>", "variants": variants}
+            entry_dict = {"id": f"<NUMBER_{number_count}>", "variants": variants}
             if any(v in pattern_matches for v in variants):
-                entry["pattern"] = r"\b\d{2}\s+\d{2}\s+\d{2}\s+\d{2}\b"
-            self.entities["numbers"].append(entry)
+                entry_dict["pattern"] = r"\b\d{2}\s+\d{2}\s+\d{2}\s+\d{2}\b"
+            self.entities.numbers.append(Entity(**entry_dict))
             number_count += 1
         for cpr in all_cpr:
-            self.entities["cpr"].append({"id": f"<CPR_{cpr_count}>", "variants": [cpr]})
+            self.entities.cpr.append(Entity(id=f"<CPR_{cpr_count}>", variants=[cpr]))
             cpr_count += 1
 
     def generate_yaml(self) -> str:
         """Generate YAML configuration from detected entities."""
-        config = {
-            "names": self.entities["names"],
-            "emails": self.entities["emails"],
-            "addresses": self.entities["addresses"],
-            "numbers": self.entities["numbers"],
-            "cpr": self.entities["cpr"],
-        }
-        return yaml.dump(config, sort_keys=False)
+        return yaml.dump(self.entities.model_dump(), sort_keys=False)
 
     def load_replacements(self, config: dict):
-        """Load replacements from YAML config."""
-        self.entities = config
-        for category in self.entities:
+        """Load replacements from YAML config using Pydantic validation."""
+        self.entities = Config.model_validate(config)  # Validate and load config
+        for category in self.entities.__fields_set__:
             self.entity_mapping[category] = {}
-            for entry in self.entities[category]:
-                for variant in entry["variants"]:
-                    self.entity_mapping[category][variant] = entry["id"]
+            for entry in getattr(self.entities, category):
+                for variant in entry.variants:
+                    self.entity_mapping[category][variant] = entry.id
 
     def anonymize(self, text: str) -> tuple:
         """Anonymize text using Presidio."""
@@ -195,20 +173,16 @@ class Anonymizer:
                 )
             },
         )
-        for entry in self.entities.get("names", []):
-            self.counts["names_replaced"] += anonymized_result.text.count(entry["id"])
-        for entry in self.entities.get("emails", []):
-            self.counts["emails_replaced"] += anonymized_result.text.count(entry["id"])
-        for entry in self.entities.get("addresses", []):
-            self.counts["addresses_replaced"] += anonymized_result.text.count(
-                entry["id"]
-            )
-        for entry in self.entities.get("numbers", []):
-            self.counts["numbers_replaced"] += anonymized_result.text.count(entry["id"])
-            if entry.get("pattern"):
-                self.counts["patterns_replaced"] += anonymized_result.text.count(
-                    entry["id"]
-                )
-        for entry in self.entities.get("cpr", []):
-            self.counts["cpr_replaced"] += anonymized_result.text.count(entry["id"])
+        for entry in self.entities.names:
+            self.counts["names_replaced"] += anonymized_result.text.count(entry.id)
+        for entry in self.entities.emails:
+            self.counts["emails_replaced"] += anonymized_result.text.count(entry.id)
+        for entry in self.entities.addresses:
+            self.counts["addresses_replaced"] += anonymized_result.text.count(entry.id)
+        for entry in self.entities.numbers:
+            self.counts["numbers_replaced"] += anonymized_result.text.count(entry.id)
+            if entry.pattern:
+                self.counts["patterns_replaced"] += anonymized_result.text.count(entry.id)
+        for entry in self.entities.cpr:
+            self.counts["cpr_replaced"] += anonymized_result.text.count(entry.id)
         return anonymized_result.text, self.counts

@@ -2,7 +2,6 @@
 
 import click
 import yaml
-import rich
 from rich.console import Console
 from rich.syntax import Syntax
 from pathlib import Path
