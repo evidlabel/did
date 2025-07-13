@@ -2,7 +2,7 @@
 
 import re
 import yaml
-from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern, RecognizerResult
+from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern
 from presidio_anonymizer import AnonymizerEngine, OperatorConfig
 from ..operators import InstanceCounterAnonymizer
 from ..utils import find_name_variants, find_number_variants
