@@ -1,7 +1,7 @@
 [project]
 name = "did"
-version = "0.1.0"
-description = "A CLI tool to anonymize Markdown files with spaCy-based entity detection and automatic YAML configuration"
+version = "0.1.1"
+description = "A CLI tool to anonymize Markdown, plain text, TeX, and BibTeX files with spaCy-based entity detection and automatic YAML configuration"
 authors = [{ name = "evid 210122431+evidlabel@users.noreply.github.com" }]
 requires-python = "~=3.12"
 readme = "README.md"
@@ -11,21 +11,33 @@ dependencies = [
     "spacy>=3.8.2,<4",
     "en-core-web-md",
     "en-core-web-lg",
-    "click>=8.1.0,<9",
+    "da_core_news_sm",  # Added for Danish language support
+    "da_core_news_md",  # Added for Danish language support
+    "click>=8.1.0,<9",  # Keeping click as rich_click depends on it
     "rapidfuzz>=3.10.0,<4",
+    "presidio-analyzer>=2.2.0",
+    "presidio-anonymizer>=2.2.0",
+    "bibtexparser",
+    "rich>=13.3.0,<14",
+    "pydantic>=2.11,<3",  # Added for YAML handling with data validation
+    "rich_click>=1.0.0",  # Added for rich CLI styling
+    "numpy>=1.26.0,<2",  # Added for vectorization
+    "mkdocs-material"
 ]
 
 [project.scripts]
 did = "did.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8.4.0,<9"]
+dev = ["pytest>=8.4.0,<9", "mkdocs"]  # Added mkdocs for documentation
 
 [tool.uv]
 
 [tool.uv.sources]
 en-core-web-md = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0/en_core_web_md-3.8.0-py3-none-any.whl" }
 en-core-web-lg = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" }
+da_core_news_sm = { url = "https://github.com/explosion/spacy-models/releases/download/da_core_news_sm-3.8.0/da_core_news_sm-3.8.0-py3-none-any.whl" }  # Added for Danish support
+da_core_news_md = { url = "https://github.com/explosion/spacy-models/releases/download/da_core_news_md-3.8.0/da_core_news_md-3.8.0-py3-none-any.whl" }  # Added for Danish support
 
 [tool.hatch.build.targets.sdist]
 include = ["src/did"]
