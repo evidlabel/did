@@ -1,11 +1,11 @@
 """CLI interface for the DID tool."""
 
-import click
+import rich_click as click
 import yaml
 from rich.console import Console
 from rich.syntax import Syntax
 from pathlib import Path
-from .file_utils import extract_text
+from .file_utils import extract_text, anonymize_file
 from .core.anonymizer import Anonymizer
 
 
@@ -21,20 +21,18 @@ def main():
 @main.command(
     help="Extract entities from input text files and generate a YAML configuration file."
 )
-@click.argument("input_files", nargs=-1, required=True, metavar="INPUT_FILES...")
+@click.option("--file", "-f", multiple=True, required=True, help="Input files")
 @click.option("--config", "-c", default="__temp.yaml", help="Output YAML config file")
-@click.option(
-    "--language", default="en", help="Language for entity detection (e.g., 'en', 'da')"
-)
-def ex(input_files, config, language):
+@click.option("--language", "-l", default="en", help="Language for entity detection (e.g., 'en', 'da')")
+def ex(file, config, language):
     """Extract entities from text files and generate YAML config."""
-    anonymizer = Anonymizer(language=language)  # Pass selected language
+    anonymizer = Anonymizer(language=language)
     console = Console()
     try:
         click.echo("=" * 20)
         click.echo("Reading input text files...")
         texts = []
-        for input_file in input_files:
+        for input_file in file:
             file_path = Path(input_file)
             text = extract_text(file_path)
             texts.append(text)
@@ -79,23 +77,17 @@ def ex(input_files, config, language):
 @main.command(
     help="Anonymize input text file using a YAML configuration and save the result."
 )
-@click.argument("input_file", required=True, metavar="INPUT_FILE")
-@click.argument("config", required=True, metavar="CONFIG_FILE")
-@click.option("--output", default=None, help="Output file path")
-@click.option(
-    "--language",
-    "-l",
-    default="en",
-    help="Language for entity detection (e.g., 'en', 'da')",
-)
-def an(input_file, config, output, language):
+@click.option("--file", "-f", required=True, help="Input file")
+@click.option("--config", "-c", required=True, help="Config file")
+@click.option("--output", "-o", default=None, help="Output file path")
+@click.option("--language", "-l", default="en", help="Language for entity detection (e.g., 'en', 'da')")
+def an(file, config, output, language):
     """Pseudonymize text files using YAML config."""
-    anonymizer = Anonymizer(language=language)  # Pass selected language
+    anonymizer = Anonymizer(language=language)
+    input_path = Path(file)
     if output is None:
-        input_path = Path(input_file)
-        output = str(
-            input_path.parent / (input_path.stem + "_anon" + input_path.suffix)
-        )
+        output = str(input_path.parent / (input_path.stem + "_anon" + input_path.suffix))
+    output_path = Path(output)
     try:
         click.echo("=" * 20)
         click.echo("Loading config...")
@@ -103,11 +95,8 @@ def an(input_file, config, output, language):
             config_data = yaml.safe_load(f) or {}
         anonymizer.load_replacements(config_data)
 
-        click.echo(f"Processing {input_file}...")
-        with open(input_file, "r") as f:
-            text = f.read()
-
-        result, counts = anonymizer.anonymize(text)
+        click.echo(f"Processing {file}...")
+        counts = anonymize_file(input_path, anonymizer, output_path)
 
         click.echo("Replacement counts:")
         click.echo(f"  Names replaced: {counts['names_replaced']}")
@@ -117,15 +106,10 @@ def an(input_file, config, output, language):
         click.echo(f"  Number patterns replaced: {counts['patterns_replaced']}")
         click.echo(f"  CPR replaced: {counts['cpr_replaced']}")
 
-        output_file = Path(output)
-        click.echo(f"Writing to {output_file}...")
-        with open(output_file, "w") as f:
-            f.write(result)
-
         console = Console()
-        with open(output_file, "r", encoding="utf-8") as f:
+        with open(output_path, "r", encoding="utf-8") as f:
             content = f.read()
-            if output_file.suffix == ".md":
+            if output_path.suffix == ".md":
                 syntax = Syntax(content, "markdown", theme="monokai")
             else:
                 syntax = Syntax(content, "text", theme="monokai")

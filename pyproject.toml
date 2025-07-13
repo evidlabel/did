@@ -1,6 +1,6 @@
 [project]
 name = "did"
-version = "0.1.0"
+version = "0.1.1"
 description = "A CLI tool to anonymize Markdown, plain text, TeX, and BibTeX files with spaCy-based entity detection and automatic YAML configuration"
 authors = [{ name = "evid 210122431+evidlabel@users.noreply.github.com" }]
 requires-python = "~=3.12"
@@ -13,20 +13,22 @@ dependencies = [
     "en-core-web-lg",
     "da_core_news_sm",  # Added for Danish language support
     "da_core_news_md",  # Added for Danish language support
-    "click>=8.1.0,<9",
+    "click>=8.1.0,<9",  # Keeping click as rich_click depends on it
     "rapidfuzz>=3.10.0,<4",
     "presidio-analyzer>=2.2.0",
     "presidio-anonymizer>=2.2.0",
     "bibtexparser",
     "rich>=13.3.0,<14",
     "pydantic>=2.11,<3",  # Added for YAML handling with data validation
+    "rich_click>=1.0.0",  # Added for rich CLI styling
+    "numpy>=1.26.0,<2",  # Added for vectorization
 ]
 
 [project.scripts]
 did = "did.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8.4.0,<9"]
+dev = ["pytest>=8.4.0,<9", "mkdocs"]  # Added mkdocs for documentation
 
 [tool.uv]
 

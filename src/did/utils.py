@@ -1,6 +1,8 @@
 """Utility functions for entity processing."""
 
+import numpy as np
 from rapidfuzz import fuzz
+from rapidfuzz.process import cdist
 
 
 def normalize_name(name: str) -> str:
@@ -34,49 +36,50 @@ def is_valid_name(name: str) -> bool:
 
 
 def find_name_variants(names: list, threshold: float = 85) -> list:
-    """Group similar names using rapidfuzz."""
+    """Group similar names using vectorized rapidfuzz."""
     if not names:
         return []
     valid_names = [name for name in names if is_valid_name(name)]
     if not valid_names:
         return []
+    normalized = [normalize_name(name) for name in valid_names]
+    scores = cdist(normalized, normalized, scorer=fuzz.ratio)
     grouped_names = []
-    processed = set()
-    for name in valid_names:
-        if name in processed:
+    visited = np.zeros(len(valid_names), dtype=bool)
+    for i in range(len(valid_names)):
+        if visited[i]:
             continue
-        variants = [name]
-        processed.add(name)
-        for other_name in valid_names:
-            if other_name not in processed:
-                score = fuzz.ratio(normalize_name(name), normalize_name(other_name))
-                if score > threshold:
-                    variants.append(other_name)
-                    processed.add(other_name)
+        variants = [valid_names[i]]
+        visited[i] = True
+        # Collect all directly similar
+        similar = np.where(scores[i] > threshold)[0]
+        for j in similar:
+            if not visited[j]:
+                variants.append(valid_names[j])
+                visited[j] = True
         if variants:
             grouped_names.append(variants)
     return grouped_names
 
 
 def find_number_variants(numbers: list, threshold: float = 80) -> list:
-    """Group similar numbers using rapidfuzz."""
+    """Group similar numbers using vectorized rapidfuzz."""
     if not numbers:
         return []
+    normalized = [normalize_number(num) for num in numbers]
+    scores = cdist(normalized, normalized, scorer=fuzz.ratio)
     grouped_numbers = []
-    processed = set()
-    for number in numbers:
-        if number in processed:
+    visited = np.zeros(len(numbers), dtype=bool)
+    for i in range(len(numbers)):
+        if visited[i]:
             continue
-        variants = [number]
-        processed.add(number)
-        for other_number in numbers:
-            if other_number not in processed:
-                score = fuzz.ratio(
-                    normalize_number(number), normalize_number(other_number)
-                )
-                if score > threshold:
-                    variants.append(other_number)
-                    processed.add(other_number)
+        variants = [numbers[i]]
+        visited[i] = True
+        similar = np.where(scores[i] > threshold)[0]
+        for j in similar:
+            if not visited[j]:
+                variants.append(numbers[j])
+                visited[j] = True
         if variants:
             grouped_numbers.append(variants)
     return grouped_numbers
