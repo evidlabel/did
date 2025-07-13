@@ -1,3 +1,5 @@
+[![Test](https://github.com/evidlabel/did/actions/workflows/pytest.yaml/badge.svg)](https://github.com/evidlabel/did/actions/workflows/pytest.yml)![Version](https://img.shields.io/github/v/release/evidlabel/did)
+
 # DID (De-ID) Pseudonymizer
 
 A CLI tool to anonymize Markdown, plain text, TeX, and BibTeX files with spaCy-based entity detection and automatic YAML configuration.
