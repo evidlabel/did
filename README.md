@@ -1,48 +1,27 @@
 # DID (De-ID) Pseudonymizer
 
-A CLI tool to anonymize text, Markdown, TeX, and BibTeX files based on Presidio, using spaCy for entity detection and rapidfuzz for fuzzy name and number matching.
+A CLI tool to anonymize Markdown, plain text, TeX, and BibTeX files with spaCy-based entity detection and automatic YAML configuration.
 
 ## Features
-- Detects names, email addresses, addresses, and numbers using Presidio with spaCy
-- Groups name and number variants (e.g., "John Doe", "Jon Doe"; "1234567890", "1234567") using rapidfuzz
+- Detects names, emails, addresses, phone numbers, and CPR numbers using Presidio with spaCy
+- Groups name and number variants using rapidfuzz
 - Extracts entities to generate a YAML config (`did ex`)
-- Anonymizes text using YAML config (`did an`), preserving file formats (e.g., .bib to .bib)
-- Supports Markdown (.md), plain text (.txt), TeX (.tex), and BibTeX (.bib) files
-- Verbose output with detected entities and replacement counts
+- Anonymizes text using YAML config (`did an`), preserving file formats
+- Supports English (`en`) and Danish (`da`)
 
 ## Installation
 ```bash
 uv sync
 ```
 
-## Usage
+## Quick Usage
 Extract entities:
 ```bash
-uv run did ex input1.txt [input2.txt ...] config.yaml
+uv run did ex -f input.txt -c config.yaml
 ```
-Anonymize files:
+Anonymize:
 ```bash
-uv run did an input.txt config.yaml output.txt
-```
-
-## Configuration
-Generated `config.yaml` example:
-```yaml
-names:
-  - id: <PERSON_1>
-    variants: ["John Doe", "Jon Doe", "john DOE"]
-  - id: <PERSON_2>
-    variants: ["Jane Smith", "Jane Smyth"]
-emails:
-  - id: <EMAIL_1>
-    variants: ["john.doe@example.com"]
-addresses:
-  - id: <ADDRESS_1>
-    variants: ["123 One Street, Springfield, US"]
-numbers:
-  - id: <NUMBER_1>
-    variants: ["1234567890", "12 34 56 78"]
-    pattern: "\\b\\d{2}\\s+\\d{2}\\s+\\d{2}\\s+\\d{2}\\b"
+uv run did an -f input.txt -c config.yaml -o output.txt
 ```
 
 For details, see the [documentation](docs/index.md).
