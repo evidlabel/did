@@ -19,7 +19,7 @@ def normalize_name(name: str) -> str:
 
 def normalize_number(number: str) -> str:
     """Normalize a number for comparison."""
-    return number.replace(" ", "").replace("-", "")
+    return number.replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace("+", "")
 
 
 def is_valid_name(name: str) -> bool:

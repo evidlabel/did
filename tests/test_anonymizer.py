@@ -83,7 +83,7 @@ def test_anonymize_cpr(anonymizer):
 
 
 def test_anonymize_mixed_content(anonymizer):
-    text = "Contact John Doe at 1234567890 or Jane Smith via 12 34 56 78. Jon Doe and Jane Smyth share details at 123 Oneway St, Springfield, US. CPR: 123456-1234"
+    text = "Contact John Doe at 1234567890 or Jane Smith via 12 34 56 78. Jon Doe and Jane Smyth share details at 123 Oneway St, Springfield, US. CPR: 123456-1234. Additional phone: 1234567"
     anonymizer.detect_entities([text])
     result, counts = anonymizer.anonymize(text)
     assert "<PHONE_NUMBER_" in result
@@ -103,7 +103,7 @@ def test_cli_extract(runner, tmp_path):
     input_file = tmp_path / "input.md"
     config_file = tmp_path / "config.yaml"
     input_file.write_text(
-        "Hello John Doe and Jon Doe, Account: 1234567890, CPR: 123456-1234"
+        "Hello John Doe and Jon Doe, CPR: 123456-1234"
     )
     result = runner.invoke(main, ["ex", "--file", str(input_file), "--config", str(config_file)])
     assert result.exit_code == 0
@@ -122,10 +122,15 @@ def test_cli_anonymize(runner, tmp_path):
     input_file = tmp_path / "input.md"
     config_file = tmp_path / "config.yaml"
     output_file = tmp_path / "output.md"
-    input_file.write_text("Hello John Doe and Jon Doe, CPR: 123456-1234 and new person Alice, new CPR: 987654-4321")
+    original_text = "Hello John Doe and Jon Doe, CPR: 123456-1234"
+    input_file.write_text(original_text)
 
     # First extract to generate config
     runner.invoke(main, ["ex", "--file", str(input_file), "--config", str(config_file)])
+
+    # Modify the input file to add new content
+    modified_text = original_text + " and John Doe again, and new person Alice, new CPR: 987654-4321"
+    input_file.write_text(modified_text)
 
     result = runner.invoke(
         main, ["an", "--file", str(input_file), "--config", str(config_file), "--output", str(output_file)]

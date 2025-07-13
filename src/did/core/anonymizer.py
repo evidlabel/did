@@ -42,6 +42,9 @@ class Anonymizer:
             name="NUMBER_PATTERN", regex=r"\b\d{2}\s+\d{2}\s+\d{2}\s+\d{2}\b", score=0.8
         )
         cpr_pattern = Pattern(name="CPR_NUMBER", regex=r"\b\d{6}-\d{4}\b", score=0.95)
+        short_number_pattern = Pattern(
+            name="SHORT_NUMBER", regex=r"\b\d{7,10}\b", score=0.5
+        )
         self.analyzer.registry.add_recognizer(
             PatternRecognizer(supported_entity="ADDRESS", patterns=[address_pattern])
         )
@@ -50,6 +53,9 @@ class Anonymizer:
         )
         self.analyzer.registry.add_recognizer(
             PatternRecognizer(supported_entity="CPR_NUMBER", patterns=[cpr_pattern])
+        )
+        self.analyzer.registry.add_recognizer(
+            PatternRecognizer(supported_entity="PHONE_NUMBER", patterns=[short_number_pattern])
         )
 
     def detect_entities(self, texts: list):
