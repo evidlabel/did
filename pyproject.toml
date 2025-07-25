@@ -21,7 +21,7 @@ dependencies = [
     "rich>=13.3.0,<14",
     "pydantic>=2.11,<3",  # Added for YAML handling with data validation
     "rich_click>=1.0.0",  # Added for rich CLI styling
-    "numpy>=1.26.0,<2",  # Added for vectorization
+    "numpy>=2.3",  # Added for vectorization
     "mkdocs-material"
 ]
 

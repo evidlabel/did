@@ -13,7 +13,7 @@ A CLI tool to anonymize Markdown, plain text, TeX, and BibTeX files with spaCy-b
 
 ## Installation
 ```bash
-uv sync
+uv pip install . 
 ```
 
 ## Quick Usage
