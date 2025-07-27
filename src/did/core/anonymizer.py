@@ -161,11 +161,76 @@ class Anonymizer:
             "numbers": "PHONE_NUMBER",
             "cpr": "CPR_NUMBER",
         }
+        self.entity_mapping = {}
         for category, entity_type in entity_type_mapping.items():
             self.entity_mapping[entity_type] = {}
             for entry in getattr(self.entities, category):
                 for variant in entry.variants:
                     self.entity_mapping[entity_type][variant] = entry.id
+
+        # Add custom recognizers for exact matches from config
+        # For names
+        name_patterns = [
+            Pattern("exact_name", re.escape(variant), 1.0)
+            for entity in self.entities.names
+            for variant in entity.variants
+        ]
+        if name_patterns:
+            self.analyzer.registry.add_recognizer(
+                PatternRecognizer(
+                    "PERSON",
+                    patterns=name_patterns,
+                    context=["name", "person", "mr", "ms", "dr"],
+                )
+            )
+
+        # For emails
+        email_patterns = [
+            Pattern("exact_email", re.escape(variant), 1.0)
+            for entity in self.entities.emails
+            for variant in entity.variants
+        ]
+        if email_patterns:
+            self.analyzer.registry.add_recognizer(
+                PatternRecognizer("EMAIL_ADDRESS", patterns=email_patterns)
+            )
+
+        # For addresses
+        address_patterns = [
+            Pattern("exact_address", re.escape(variant), 1.0)
+            for entity in self.entities.addresses
+            for variant in entity.variants
+        ]
+        if address_patterns:
+            self.analyzer.registry.add_recognizer(
+                PatternRecognizer("ADDRESS", patterns=address_patterns)
+            )
+
+        # For numbers
+        number_patterns = []
+        unique_patterns = set()
+        for entity in self.entities.numbers:
+            for variant in entity.variants:
+                number_patterns.append(Pattern("exact_number", re.escape(variant), 1.0))
+            if entity.pattern:
+                unique_patterns.add(entity.pattern)
+        for pat in unique_patterns:
+            number_patterns.append(Pattern("number_pattern", pat, 0.9))
+        if number_patterns:
+            self.analyzer.registry.add_recognizer(
+                PatternRecognizer("PHONE_NUMBER", patterns=number_patterns)
+            )
+
+        # For CPR
+        cpr_patterns = [
+            Pattern("exact_cpr", re.escape(variant), 1.0)
+            for entity in self.entities.cpr
+            for variant in entity.variants
+        ]
+        if cpr_patterns:
+            self.analyzer.registry.add_recognizer(
+                PatternRecognizer("CPR_NUMBER", patterns=cpr_patterns)
+            )
 
     def anonymize(self, text: str) -> tuple:
         """Anonymize text by detecting entities and applying replacements."""
