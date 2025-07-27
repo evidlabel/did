@@ -22,7 +22,7 @@ dependencies = [
     "pydantic>=2.11,<3",  # Added for YAML handling with data validation
     "rich_click>=1.0.0",  # Added for rich CLI styling
     "numpy>=2.3",  # Added for vectorization
-    "mkdocs-material"
+    "mkdocs-material", 
 ]
 
 [project.scripts]

@@ -5,7 +5,7 @@ import yaml
 from rich.console import Console
 from rich.syntax import Syntax
 from pathlib import Path
-from .file_utils import extract_text, anonymize_file
+from .file_utils import extract_text, anonymize_file, md_to_typst
 from .core.anonymizer import Anonymizer
 
 
@@ -81,13 +81,14 @@ def ex(file, config, language):
 @click.option("--config", "-c", required=True, help="Config file")
 @click.option("--output", "-o", default=None, help="Output file path")
 @click.option("--language", "-l", default="en", help="Language for entity detection (e.g., 'en', 'da')")
-def an(file, config, output, language):
+@click.option("--typst", "-t", type=str, default=None, help="Directory to export Typst files (main.typ and vars.typ) with real entity values.")
+def an(file, config, output, language, typst):
     """Pseudonymize text files using YAML config."""
     anonymizer = Anonymizer(language=language)
     input_path = Path(file)
-    if output is None:
+    if output is None and not typst:
         output = str(input_path.parent / (input_path.stem + "_anon" + input_path.suffix))
-    output_path = Path(output)
+    output_path = Path(output) if output else None
     try:
         click.echo("=" * 20)
         click.echo("Loading config...")
@@ -96,24 +97,107 @@ def an(file, config, output, language):
         anonymizer.load_replacements(config_data)
 
         click.echo(f"Processing {file}...")
-        counts = anonymize_file(input_path, anonymizer, output_path)
 
-        click.echo("Replacement counts:")
-        click.echo(f"  Names replaced: {counts['names_replaced']}")
-        click.echo(f"  Emails replaced: {counts['emails_replaced']}")
-        click.echo(f"  Addresses replaced: {counts['addresses_replaced']}")
-        click.echo(f"  Numbers replaced: {counts['numbers_replaced']}")
-        click.echo(f"  Number patterns replaced: {counts['patterns_replaced']}")
-        click.echo(f"  CPR replaced: {counts['cpr_replaced']}")
+        if typst:
+            if input_path.suffix not in [".md", ".txt"]:
+                click.echo("Typst export currently supported only for .md and .txt files.")
+                raise click.Abort()
 
-        console = Console()
-        with open(output_path, "r", encoding="utf-8") as f:
-            content = f.read()
-            if output_path.suffix == ".md":
-                syntax = Syntax(content, "markdown", theme="monokai")
-            else:
-                syntax = Syntax(content, "text", theme="monokai")
+            # Generate Typst mappings and real values
+            var_counters = {
+                "names": 0,
+                "emails": 0,
+                "addresses": 0,
+                "numbers": 0,
+                "cpr": 0,
+            }
+            typst_mappings = {}  # var -> real_value
+            for cat in var_counters:
+                prefix = {"names": "P", "emails": "E", "addresses": "A", "numbers": "N", "cpr": "C"}[cat]
+                for entity in getattr(anonymizer.entities, cat):
+                    var_counters[cat] += 1
+                    var = f"{prefix}{var_counters[cat]}"
+                    real_val = max(entity.variants, key=len)
+                    typst_mappings[var] = real_val
+                    entity._original_id = entity.id
+                    entity.id = f"#{var}"
+
+            # Anonymize text
+            text = extract_text(input_path)
+            anonymized_text, field_counts = anonymizer.anonymize(text)
+
+            # Restore original ids
+            for cat in var_counters:
+                for entity in getattr(anonymizer.entities, cat):
+                    entity.id = entity._original_id
+                    del entity._original_id
+
+            # Create output paths
+            temp_dir = Path(typst)
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            main_path = temp_dir / "main.typ"
+            vars_path = temp_dir / "vars.typ"
+
+            # Write vars.typ
+            with open(vars_path, "w", encoding="utf-8") as f:
+                for var, val in typst_mappings.items():
+                    escaped = val.replace("\\", "\\\\").replace('"', '\\"')
+                    f.write(f'#let {var} = "{escaped}"\n')
+
+            # Write main.typ
+            with open(main_path, "w", encoding="utf-8") as f:
+                f.write('#import "vars.typ": *\n\n')
+                if input_path.suffix == ".md":
+                    f.write(md_to_typst(anonymized_text))
+                else:
+                    f.write(anonymized_text)
+
+            counts = field_counts
+
+            click.echo("Replacement counts:")
+            click.echo(f"  Names replaced: {counts['names_replaced']}")
+            click.echo(f"  Emails replaced: {counts['emails_replaced']}")
+            click.echo(f"  Addresses replaced: {counts['addresses_replaced']}")
+            click.echo(f"  Numbers replaced: {counts['numbers_replaced']}")
+            click.echo(f"  Number patterns replaced: {counts['patterns_replaced']}")
+            click.echo(f"  CPR replaced: {counts['cpr_replaced']}")
+
+            console = Console()
+            click.echo(f"\nTypst files written to {main_path.parent}")
+            click.echo(f" - {main_path}")
+            click.echo(f" - {vars_path}")
+
+            click.echo("\nPreview of vars.typ:")
+            with open(vars_path, "r", encoding="utf-8") as f:
+                vars_content = f.read()
+            syntax = Syntax(vars_content, "rust")
             console.print(syntax)
+
+            click.echo("\nPreview of main.typ:")
+            with open(main_path, "r", encoding="utf-8") as f:
+                main_content = f.read()
+            syntax = Syntax(main_content, "rust")
+            console.print(syntax)
+
+        else:
+            counts = anonymize_file(input_path, anonymizer, output_path)
+
+            click.echo("Replacement counts:")
+            click.echo(f"  Names replaced: {counts['names_replaced']}")
+            click.echo(f"  Emails replaced: {counts['emails_replaced']}")
+            click.echo(f"  Addresses replaced: {counts['addresses_replaced']}")
+            click.echo(f"  Numbers replaced: {counts['numbers_replaced']}")
+            click.echo(f"  Number patterns replaced: {counts['patterns_replaced']}")
+            click.echo(f"  CPR replaced: {counts['cpr_replaced']}")
+
+            console = Console()
+            with open(output_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                if output_path.suffix == ".md":
+                    syntax = Syntax(content, "markdown", theme="monokai")
+                else:
+                    syntax = Syntax(content, "text", theme="monokai")
+                console.print(syntax)
 
         click.echo("=" * 20)
 

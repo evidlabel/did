@@ -58,3 +58,22 @@ def anonymize_file(input_path: Path, anonymizer: Anonymizer, output_path: Path) 
     else:
         raise ValueError(f"Unsupported file type: {input_path.suffix}")
     return counts
+
+
+def md_to_typst(md: str) -> str:
+    """Simple Markdown to Typst converter."""
+    # Headings
+    md = re.sub(r'^#\s+(.*)$', r'= \1', md, flags=re.M)
+    md = re.sub(r'^##\s+(.*)$', r'== \1', md, flags=re.M)
+    md = re.sub(r'^###\s+(.*)$', r'=== \1', md, flags=re.M)
+    md = re.sub(r'^####\s+(.*)$', r'==== \1', md, flags=re.M)
+    # Bold and italic
+    md = re.sub(r'\*\*(.*?)\*\*', r'*\1*', md)
+    md = re.sub(r'__(.*?)__', r'*\1*', md)
+    md = re.sub(r'\*(.*?)\*', r'_\1_', md)
+    md = re.sub(r'_(.*?)_', r'_\1_', md)
+    # Code
+    md = re.sub(r'`(.*?)`', r'`\1`', md)
+    # Links
+    md = re.sub(r'\[(.*?)\]\((.*?)\)', r'#link("\2")[\1]', md)
+    return md
