@@ -149,7 +149,7 @@ class Anonymizer:
 
     def generate_yaml(self) -> str:
         """Generate YAML configuration from detected entities."""
-        return yaml.dump(self.entities.model_dump(), sort_keys=False)
+        return yaml.dump(self.entities.model_dump(exclude_none=True), sort_keys=False)
 
     def load_replacements(self, config: dict):
         """Load replacements from YAML config using Pydantic validation."""

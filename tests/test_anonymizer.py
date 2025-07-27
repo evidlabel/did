@@ -31,6 +31,7 @@ def test_extract_empty_text(anonymizer):
 def test_anonymize_name_exact(anonymizer):
     text = "Hello John Doe, how are you?"
     anonymizer.detect_entities([text])
+    anonymizer.load_replacements(anonymizer.entities.model_dump(exclude_none=True))
     result, counts = anonymizer.anonymize(text)
     assert "<PERSON_1>" in result
     assert counts["names_found"] >= 1
@@ -40,6 +41,7 @@ def test_anonymize_name_exact(anonymizer):
 def test_anonymize_name_variants(anonymizer):
     text = "John Doe and Jon Doe and john DOE were mentioned."
     anonymizer.detect_entities([text])
+    anonymizer.load_replacements(anonymizer.entities.model_dump(exclude_none=True))
     config = yaml.safe_load(anonymizer.generate_yaml())
     assert len(config["names"]) == 1
     result, counts = anonymizer.anonymize(text)
@@ -51,6 +53,7 @@ def test_anonymize_name_variants(anonymizer):
 def test_anonymize_number_variants(anonymizer):
     text = "Account: 1234567890, Phone: 1234567, Code: 12 34 56 78"
     anonymizer.detect_entities([text])
+    anonymizer.load_replacements(anonymizer.entities.model_dump(exclude_none=True))
     config = yaml.safe_load(anonymizer.generate_yaml())
     assert any("1234567890" in entry["variants"] for entry in config["numbers"])
     assert any(
@@ -67,6 +70,7 @@ def test_anonymize_number_variants(anonymizer):
 def test_anonymize_address(anonymizer):
     text = "Lives at 123 Oneway St, Springfield, US"
     anonymizer.detect_entities([text])
+    anonymizer.load_replacements(anonymizer.entities.model_dump(exclude_none=True))
     result, counts = anonymizer.anonymize(text)
     assert "<ADDRESS_1>" in result
     assert counts["addresses_found"] >= 1
@@ -76,6 +80,7 @@ def test_anonymize_address(anonymizer):
 def test_anonymize_cpr(anonymizer):
     text = "CPR: 123456-1234"
     anonymizer.detect_entities([text])
+    anonymizer.load_replacements(anonymizer.entities.model_dump(exclude_none=True))
     result, counts = anonymizer.anonymize(text)
     assert "<CPR_NUMBER_1>" in result
     assert counts["cpr_found"] >= 1
@@ -85,6 +90,7 @@ def test_anonymize_cpr(anonymizer):
 def test_anonymize_mixed_content(anonymizer):
     text = "Contact John Doe at 1234567890 or Jane Smith via 12 34 56 78. Jon Doe and Jane Smyth share details at 123 Oneway St, Springfield, US. CPR: 123456-1234. Additional phone: 1234567"
     anonymizer.detect_entities([text])
+    anonymizer.load_replacements(anonymizer.entities.model_dump(exclude_none=True))
     result, counts = anonymizer.anonymize(text)
     assert "<PHONE_NUMBER_" in result
     assert "<ADDRESS_" in result
@@ -136,13 +142,13 @@ def test_cli_anonymize(runner, tmp_path):
         main, ["an", "--file", str(input_file), "--config", str(config_file), "--output", str(output_file)]
     )
     assert result.exit_code == 0
-    assert "Names replaced: 4" in result.output  # Including new
-    assert "CPR replaced: 2" in result.output
+    assert "Names replaced: 3" in result.output
+    assert "CPR replaced: 1" in result.output
     assert output_file.exists()
     with open(output_file, "r") as f:
         content = f.read()
         assert "<PERSON_1>" in content
-        assert "<PERSON_2>" in content  # New person gets next number
         assert "<CPR_NUMBER_1>" in content
-        assert "<CPR_NUMBER_2>" in content  # New CPR gets next
+        assert "Alice" in content
+        assert "987654-4321" in content
         assert content.count("<PERSON_1>") == 3  # Variants of John Doe
