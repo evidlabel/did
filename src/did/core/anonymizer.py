@@ -3,6 +3,7 @@
 import re
 import yaml
 from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern
+from presidio_analyzer.nlp_engine import SpacyNlpEngine
 from presidio_anonymizer import AnonymizerEngine, OperatorConfig
 from ..operators import InstanceCounterAnonymizer
 from ..utils import find_name_variants, find_number_variants
@@ -13,7 +14,17 @@ class Anonymizer:
     """Handles entity detection and anonymization."""
 
     def __init__(self, language="en"):
-        self.analyzer = AnalyzerEngine(supported_languages=[language])
+        # Configure spaCy model based on language
+        if language == "en":
+            spacy_model = "en_core_web_lg"
+        elif language == "da":
+            spacy_model = "da_core_news_md"
+        else:
+            raise ValueError(f"Unsupported language: {language}")
+
+        nlp_engine = SpacyNlpEngine(models=[{"lang_code": language, "model_name": spacy_model}])
+        self.analyzer = AnalyzerEngine(nlp_engine=nlp_engine, supported_languages=[language])
+
         self.anonymizer_engine = AnonymizerEngine()
         self.anonymizer_engine.add_anonymizer(InstanceCounterAnonymizer)
         self.entity_mapping = {}
