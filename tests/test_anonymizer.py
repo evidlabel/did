@@ -77,6 +77,18 @@ def test_anonymize_address(anonymizer):
     assert counts["addresses_replaced"] >= 1
 
 
+def test_anonymize_danish_address():
+    anonymizer = Anonymizer(language="da")
+    text = "Bor på Søndergade 14,1.tv, 8600 Silkeborg"
+    anonymizer.detect_entities([text])
+    assert anonymizer.counts["addresses_found"] >= 1
+    anonymizer.load_replacements(anonymizer.entities.model_dump(exclude_none=True))
+    result, counts = anonymizer.anonymize(text)
+    assert "<ADDRESS_1>" in result
+    assert counts["addresses_found"] >= 1
+    assert counts["addresses_replaced"] >= 1
+
+
 def test_anonymize_cpr(anonymizer):
     text = "CPR: 123456-1234"
     anonymizer.detect_entities([text])
