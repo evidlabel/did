@@ -7,6 +7,7 @@ from presidio_analyzer.nlp_engine import SpacyNlpEngine
 from .models import Config, Entity
 from ..utils import find_name_variants, find_number_variants
 from .number_detector import HighDigitDensityRecognizer
+from .general_number_detector import GeneralNumberRecognizer
 
 
 class Anonymizer:
@@ -45,6 +46,7 @@ class Anonymizer:
             PatternRecognizer(supported_entity="CPR_NUMBER", patterns=[cpr_pattern])
         )
         self.analyzer.registry.add_recognizer(HighDigitDensityRecognizer(min_digits=4, window_size=12, density_threshold=0.4))
+        self.analyzer.registry.add_recognizer(GeneralNumberRecognizer())
 
     def preprocess_text(self, text: str):
         """Preprocess text to join hyphenated multi-line words for detection."""
@@ -97,6 +99,7 @@ class Anonymizer:
                     "EMAIL_ADDRESS",
                     "LOCATION",
                     "NUMBER",
+                    "PHONE_NUMBER",
                     "CPR_NUMBER",
                 ],
                 language=self.language,
@@ -117,7 +120,7 @@ class Anonymizer:
                     all_cpr.append(entity_text)
                     self.counts["cpr_found"] += 1
                 if (
-                    result.entity_type == "NUMBER"
+                    result.entity_type in ["NUMBER", "PHONE_NUMBER"]
                     and entity_text not in all_numbers
                     and entity_text not in all_cpr
                 ):

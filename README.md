@@ -23,7 +23,7 @@ did ex -f input.txt -c config.yaml
 ```
 Anonymize:
 ```bash
-did an -f input.txt -c config.yaml -o output.txt
+did an -f input.txt -c config.yaml -o output.txt -t typ
 ```
 
 For details, see the [documentation](docs/index.md).
