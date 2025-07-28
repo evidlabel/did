@@ -47,6 +47,11 @@ class Anonymizer:
         short_number_pattern = Pattern(
             name="SHORT_NUMBER", regex=r"\b\d{7,10}\b", score=0.5
         )
+        high_digit_pattern = Pattern(
+            name="HIGH_DIGIT",
+            regex=r"\b(?=(?:.*?\d){6})[\w-]+\b",
+            score=0.6
+        )
         self.analyzer.registry.add_recognizer(
             PatternRecognizer(supported_entity="NUMBER_PATTERN", patterns=[number_pattern])
         )
@@ -55,6 +60,9 @@ class Anonymizer:
         )
         self.analyzer.registry.add_recognizer(
             PatternRecognizer(supported_entity="PHONE_NUMBER", patterns=[short_number_pattern])
+        )
+        self.analyzer.registry.add_recognizer(
+            PatternRecognizer(supported_entity="HIGH_DIGIT", patterns=[high_digit_pattern])
         )
 
     def detect_entities(self, texts: list):
@@ -69,6 +77,8 @@ class Anonymizer:
         all_addresses = []
         all_numbers = []
         pattern_matches = []
+        date_matches = []
+        high_matches = []
         all_cpr = []
         for text in texts:
             results = self.analyzer.analyze(
@@ -80,6 +90,8 @@ class Anonymizer:
                     "PHONE_NUMBER",
                     "NUMBER_PATTERN",
                     "CPR_NUMBER",
+                    "DATE_TIME",
+                    "HIGH_DIGIT",
                 ],
                 language=self.language,
             )
@@ -88,24 +100,31 @@ class Anonymizer:
                 if result.entity_type == "PERSON" and entity_text not in all_names:
                     all_names.append(entity_text)
                     self.counts["names_found"] += 1
-                elif result.entity_type == "EMAIL_ADDRESS" and entity_text not in all_emails:
+                if result.entity_type == "EMAIL_ADDRESS" and entity_text not in all_emails:
                     all_emails.append(entity_text)
                     self.counts["emails_found"] += 1
-                elif result.entity_type == "LOCATION" and entity_text not in all_addresses:
+                if result.entity_type == "LOCATION" and entity_text not in all_addresses:
                     all_addresses.append(entity_text)
                     self.counts["addresses_found"] += 1
-                elif (
-                    result.entity_type in ["PHONE_NUMBER", "NUMBER_PATTERN"]
+                if result.entity_type == "CPR_NUMBER" and entity_text not in all_cpr:
+                    all_cpr.append(entity_text)
+                    self.counts["cpr_found"] += 1
+                if (
+                    result.entity_type in ["PHONE_NUMBER", "NUMBER_PATTERN", "DATE_TIME", "HIGH_DIGIT"]
                     and entity_text not in all_numbers
+                    and entity_text not in all_cpr
                 ):
                     all_numbers.append(entity_text)
                     self.counts["numbers_found"] += 1
                     if result.entity_type == "NUMBER_PATTERN":
                         pattern_matches.append(entity_text)
                         self.counts["patterns_found"] += 1
-                elif result.entity_type == "CPR_NUMBER" and entity_text not in all_cpr:
-                    all_cpr.append(entity_text)
-                    self.counts["cpr_found"] += 1
+                    if result.entity_type == "DATE_TIME":
+                        date_matches.append(entity_text)
+                        self.counts["patterns_found"] += 1
+                    if result.entity_type == "HIGH_DIGIT":
+                        high_matches.append(entity_text)
+                        self.counts["patterns_found"] += 1
         grouped_names = find_name_variants(all_names)
         for variants in grouped_names:
             self.entities.names.append(
@@ -125,8 +144,15 @@ class Anonymizer:
         grouped_numbers = find_number_variants(all_numbers)
         for variants in grouped_numbers:
             entry_dict = {"id": f"<PHONE_NUMBER_{number_count}>", "variants": variants}
-            if any(v in pattern_matches for v in variants):
+            has_pattern = any(v in pattern_matches for v in variants)
+            has_date = any(v in date_matches for v in variants)
+            has_high = any(v in high_matches for v in variants)
+            if has_pattern:
                 entry_dict["pattern"] = r"\b\d{2}\s+\d{2}\s+\d{2}\s+\d{2}\b"
+            elif has_date:
+                entry_dict["pattern"] = r"\b\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2})?\b"
+            elif has_high:
+                entry_dict["pattern"] = r"\b(?=(?:.*?\d){6})[\w-]+\b"
             self.entities.numbers.append(Entity(**entry_dict))
             number_count += 1
         for cpr in all_cpr:

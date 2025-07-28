@@ -13,17 +13,17 @@ A CLI tool to anonymize Markdown, plain text, TeX, and BibTeX files with spaCy-b
 
 ## Installation
 ```bash
-uv pip install . 
+uv pip install https://github.com/evidlabel/did.git
 ```
 
 ## Quick Usage
 Extract entities:
 ```bash
-uv run did ex -f input.txt -c config.yaml
+did ex -f input.txt -c config.yaml
 ```
 Anonymize:
 ```bash
-uv run did an -f input.txt -c config.yaml -o output.txt
+did an -f input.txt -c config.yaml -o output.txt
 ```
 
 For details, see the [documentation](docs/index.md).
