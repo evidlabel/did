@@ -157,7 +157,8 @@ class Anonymizer:
 
     def generate_yaml(self) -> str:
         """Generate YAML configuration from detected entities."""
-        return yaml.dump(self.entities.model_dump(exclude_none=True), sort_keys=False)
+        data = self.entities.model_dump(exclude_none=True)
+        return yaml.safe_dump(data, sort_keys=False)
 
     def load_replacements(self, config: dict):
         """Load replacements from YAML config using Pydantic validation."""
@@ -189,5 +190,6 @@ class Anonymizer:
                     count = len(re.findall(pattern, text))
                     self.counts[found_key] += count
                     self.counts[replaced_key] += count
-                    text = re.sub(pattern, entity.id, text)
+                    replacement = f'"{entity.id}"' if cat in ["numbers", "cpr"] else entity.id  # Surround with quotes for numbers and CPR
+                    text = re.sub(pattern, replacement, text)
         return text, self.counts
