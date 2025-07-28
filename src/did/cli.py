@@ -55,7 +55,6 @@ def ex(file, config, language):
         click.echo(f"  Emails found: {anonymizer.counts['emails_found']}")
         click.echo(f"  Addresses found: {anonymizer.counts['addresses_found']}")
         click.echo(f"  Numbers found: {anonymizer.counts['numbers_found']}")
-        click.echo(f"  Number patterns found: {anonymizer.counts['patterns_found']}")
         click.echo(f"  CPR found: {anonymizer.counts['cpr_found']}")
 
         yaml_str = anonymizer.generate_yaml()
@@ -278,9 +277,6 @@ def an(file, config, output, language, typst):
                 found_key = replaced_key.replace("_replaced", "_found")
                 counts[found_key] += count
                 counts[replaced_key] += count
-                if cat == "numbers" and pat:
-                    counts["patterns_found"] += count
-                    counts["patterns_replaced"] += count
                 text = re.sub(pattern, repl, text)
 
             anonymized_text = text
@@ -317,7 +313,6 @@ def an(file, config, output, language, typst):
             click.echo(f"  Emails replaced: {counts['emails_replaced']}")
             click.echo(f"  Addresses replaced: {counts['addresses_replaced']}")
             click.echo(f"  Numbers replaced: {counts['numbers_replaced']}")
-            click.echo(f"  Number patterns replaced: {counts['patterns_replaced']}")
             click.echo(f"  CPR replaced: {counts['cpr_replaced']}")
 
             console = Console()
@@ -352,7 +347,6 @@ def an(file, config, output, language, typst):
             click.echo(f"  Emails replaced: {counts['emails_replaced']}")
             click.echo(f"  Addresses replaced: {counts['addresses_replaced']}")
             click.echo(f"  Numbers replaced: {counts['numbers_replaced']}")
-            click.echo(f"  Number patterns replaced: {counts['patterns_replaced']}")
             click.echo(f"  CPR replaced: {counts['cpr_replaced']}")
 
             console = Console()

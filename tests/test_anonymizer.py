@@ -58,13 +58,11 @@ def test_anonymize_number_variants(anonymizer):
     assert any("1234567890" in entry["variants"] for entry in config["numbers"])
     assert any(
         "12 34 56 78" in entry["variants"]
-        and entry.get("pattern") == r"\b\d{2}\s+\d{2}\s+\d{2}\s+\d{2}\b"
         for entry in config["numbers"]
     )
     result, counts = anonymizer.anonymize(text)
-    assert "<PHONE_NUMBER_" in result
+    assert "<NUMBER_" in result
     assert counts["numbers_found"] >= 3
-    assert counts["patterns_found"] >= 1
 
 
 def test_anonymize_address(anonymizer):
@@ -104,13 +102,12 @@ def test_anonymize_mixed_content(anonymizer):
     anonymizer.detect_entities([text])
     anonymizer.load_replacements(anonymizer.entities.model_dump(exclude_none=True))
     result, counts = anonymizer.anonymize(text)
-    assert "<PHONE_NUMBER_" in result
+    assert "<NUMBER_" in result
     assert "<ADDRESS_" in result
     assert "<CPR_NUMBER_" in result
     assert counts["names_found"] >= 4
     assert counts["names_replaced"] >= 4
     assert counts["numbers_found"] >= 3
-    assert counts["patterns_found"] >= 1
     assert counts["addresses_found"] >= 1
     assert counts["addresses_replaced"] >= 1
     assert counts["cpr_found"] >= 1

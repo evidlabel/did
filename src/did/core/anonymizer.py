@@ -2,10 +2,45 @@
 
 import re
 import yaml
-from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern
+from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern, EntityRecognizer, RecognizerResult
 from presidio_analyzer.nlp_engine import SpacyNlpEngine
 from .models import Config, Entity
 from ..utils import find_name_variants, find_number_variants
+
+
+class HighDigitDensityRecognizer(EntityRecognizer):
+    """Custom recognizer for substrings with high digit density (>5 digits in 12-char window)."""
+
+    expected_entity_type = "NUMBER"
+
+    def load(self):
+        pass
+
+    def analyze(self, text, entities, nlp_artifacts=None):
+        results = []
+        intervals = []
+        for i in range(len(text) - 11):
+            window = text[i : i + 12]
+            digit_count = sum(1 for c in window if c.isdigit())
+            if digit_count > 5:
+                intervals.append((i, i + 12))
+
+        # Merge overlapping intervals
+        if intervals:
+            intervals.sort()
+            merged = []
+            for interval in intervals:
+                if not merged or merged[-1][1] < interval[0]:
+                    merged.append(interval)
+                else:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], interval[1]))
+            for start, end in merged:
+                results.append(
+                    RecognizerResult(
+                        entity_type="NUMBER", start=start, end=end, score=0.7
+                    )
+                )
+        return results
 
 
 class Anonymizer:
@@ -32,38 +67,48 @@ class Anonymizer:
             "addresses_replaced": 0,
             "numbers_found": 0,
             "numbers_replaced": 0,
-            "patterns_found": 0,
-            "patterns_replaced": 0,
             "cpr_found": 0,
             "cpr_replaced": 0,
         }
         self.entities: Config = Config()
         self.language = language
 
-        number_pattern = Pattern(
-            name="NUMBER_PATTERN", regex=r"\b\d{2}\s+\d{2}\s+\d{2}\s+\d{2}\b", score=0.8
-        )
+        # Add custom recognizers
         cpr_pattern = Pattern(name="CPR_NUMBER", regex=r"\b\d{6}-\d{4}\b", score=0.95)
-        short_number_pattern = Pattern(
-            name="SHORT_NUMBER", regex=r"\b\d{7,10}\b", score=0.5
-        )
-        high_digit_pattern = Pattern(
-            name="HIGH_DIGIT",
-            regex=r"\b(?=(?:.*?\d){6})[\w-]+\b",
-            score=0.6
-        )
-        self.analyzer.registry.add_recognizer(
-            PatternRecognizer(supported_entity="NUMBER_PATTERN", patterns=[number_pattern])
-        )
         self.analyzer.registry.add_recognizer(
             PatternRecognizer(supported_entity="CPR_NUMBER", patterns=[cpr_pattern])
         )
-        self.analyzer.registry.add_recognizer(
-            PatternRecognizer(supported_entity="PHONE_NUMBER", patterns=[short_number_pattern])
-        )
-        self.analyzer.registry.add_recognizer(
-            PatternRecognizer(supported_entity="HIGH_DIGIT", patterns=[high_digit_pattern])
-        )
+        self.analyzer.registry.add_recognizer(HighDigitDensityRecognizer())
+
+    def preprocess_text(self, text: str):
+        """Preprocess text to join hyphenated multi-line words for detection."""
+        positions = []
+        detection_text = ""
+        i = 0
+        while i < len(text):
+            if (
+                i > 0
+                and text[i - 1].isalpha()
+                and text[i] == "-"
+                and i + 1 < len(text)
+                and text[i + 1] == "\n"
+                and i + 2 < len(text)
+                and text[i + 2].isalpha()
+            ):
+                i += 2  # Skip -\n
+                continue
+            detection_text += text[i]
+            positions.append(i)
+            i += 1
+
+        def map_to_original(d_start: int, d_end: int):
+            if d_start >= len(positions):
+                return len(text), len(text)
+            o_start = positions[d_start]
+            o_end = positions[d_end - 1] + 1 if d_end > 0 and d_end <= len(positions) else len(text)
+            return o_start, o_end
+
+        return detection_text, map_to_original
 
     def detect_entities(self, texts: list):
         """Detect entities in multiple texts using Presidio."""
@@ -76,27 +121,23 @@ class Anonymizer:
         all_emails = []
         all_addresses = []
         all_numbers = []
-        pattern_matches = []
-        date_matches = []
-        high_matches = []
         all_cpr = []
         for text in texts:
+            detection_text, map_to_original = self.preprocess_text(text)
             results = self.analyzer.analyze(
-                text=text,
+                text=detection_text,
                 entities=[
                     "PERSON",
                     "EMAIL_ADDRESS",
                     "LOCATION",
-                    "PHONE_NUMBER",
-                    "NUMBER_PATTERN",
+                    "NUMBER",
                     "CPR_NUMBER",
-                    "DATE_TIME",
-                    "HIGH_DIGIT",
                 ],
                 language=self.language,
             )
             for result in results:
-                entity_text = text[result.start : result.end]
+                o_start, o_end = map_to_original(result.start, result.end)
+                entity_text = text[o_start:o_end]
                 if result.entity_type == "PERSON" and entity_text not in all_names:
                     all_names.append(entity_text)
                     self.counts["names_found"] += 1
@@ -110,21 +151,12 @@ class Anonymizer:
                     all_cpr.append(entity_text)
                     self.counts["cpr_found"] += 1
                 if (
-                    result.entity_type in ["PHONE_NUMBER", "NUMBER_PATTERN", "DATE_TIME", "HIGH_DIGIT"]
+                    result.entity_type == "NUMBER"
                     and entity_text not in all_numbers
                     and entity_text not in all_cpr
                 ):
                     all_numbers.append(entity_text)
                     self.counts["numbers_found"] += 1
-                    if result.entity_type == "NUMBER_PATTERN":
-                        pattern_matches.append(entity_text)
-                        self.counts["patterns_found"] += 1
-                    if result.entity_type == "DATE_TIME":
-                        date_matches.append(entity_text)
-                        self.counts["patterns_found"] += 1
-                    if result.entity_type == "HIGH_DIGIT":
-                        high_matches.append(entity_text)
-                        self.counts["patterns_found"] += 1
         grouped_names = find_name_variants(all_names)
         for variants in grouped_names:
             self.entities.names.append(
@@ -143,17 +175,9 @@ class Anonymizer:
             address_count += 1
         grouped_numbers = find_number_variants(all_numbers)
         for variants in grouped_numbers:
-            entry_dict = {"id": f"<PHONE_NUMBER_{number_count}>", "variants": variants}
-            has_pattern = any(v in pattern_matches for v in variants)
-            has_date = any(v in date_matches for v in variants)
-            has_high = any(v in high_matches for v in variants)
-            if has_pattern:
-                entry_dict["pattern"] = r"\b\d{2}\s+\d{2}\s+\d{2}\s+\d{2}\b"
-            elif has_date:
-                entry_dict["pattern"] = r"\b\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2})?\b"
-            elif has_high:
-                entry_dict["pattern"] = r"\b(?=(?:.*?\d){6})[\w-]+\b"
-            self.entities.numbers.append(Entity(**entry_dict))
+            self.entities.numbers.append(
+                Entity(id=f"<NUMBER_{number_count}>", variants=variants)
+            )
             number_count += 1
         for cpr in all_cpr:
             self.entities.cpr.append(
@@ -186,12 +210,14 @@ class Anonymizer:
                 sorted_variants = sorted(entity.variants, key=len, reverse=True)
                 for variant in sorted_variants:
                     escaped = re.escape(variant)
-                    pattern = escaped if cat == "addresses" else r"\b" + escaped + r"\b"
+                    if cat in ["names", "numbers", "cpr"] and "\n" in variant:
+                        pattern = escaped
+                    elif cat == "addresses":
+                        pattern = escaped
+                    else:
+                        pattern = r"\b" + escaped + r"\b"
                     count = len(re.findall(pattern, text))
                     self.counts[found_key] += count
                     self.counts[replaced_key] += count
-                    if cat == "numbers" and entity.pattern:
-                        self.counts["patterns_found"] += count
-                        self.counts["patterns_replaced"] += count
                     text = re.sub(pattern, entity.id, text)
         return text, self.counts
