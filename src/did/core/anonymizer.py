@@ -2,45 +2,11 @@
 
 import re
 import yaml
-from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern, EntityRecognizer, RecognizerResult
+from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern
 from presidio_analyzer.nlp_engine import SpacyNlpEngine
 from .models import Config, Entity
 from ..utils import find_name_variants, find_number_variants
-
-
-class HighDigitDensityRecognizer(EntityRecognizer):
-    """Custom recognizer for substrings with high digit density (>5 digits in 12-char window)."""
-
-    expected_entity_type = "NUMBER"
-
-    def load(self):
-        pass
-
-    def analyze(self, text, entities, nlp_artifacts=None):
-        results = []
-        intervals = []
-        for i in range(len(text) - 11):
-            window = text[i : i + 12]
-            digit_count = sum(1 for c in window if c.isdigit())
-            if digit_count > 5:
-                intervals.append((i, i + 12))
-
-        # Merge overlapping intervals
-        if intervals:
-            intervals.sort()
-            merged = []
-            for interval in intervals:
-                if not merged or merged[-1][1] < interval[0]:
-                    merged.append(interval)
-                else:
-                    merged[-1] = (merged[-1][0], max(merged[-1][1], interval[1]))
-            for start, end in merged:
-                results.append(
-                    RecognizerResult(
-                        entity_type="NUMBER", start=start, end=end, score=0.7
-                    )
-                )
-        return results
+from .number_detector import HighDigitDensityRecognizer
 
 
 class Anonymizer:
@@ -78,7 +44,7 @@ class Anonymizer:
         self.analyzer.registry.add_recognizer(
             PatternRecognizer(supported_entity="CPR_NUMBER", patterns=[cpr_pattern])
         )
-        self.analyzer.registry.add_recognizer(HighDigitDensityRecognizer())
+        self.analyzer.registry.add_recognizer(HighDigitDensityRecognizer(min_digits=4, window_size=12, density_threshold=0.4))
 
     def preprocess_text(self, text: str):
         """Preprocess text to join hyphenated multi-line words for detection."""

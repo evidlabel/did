@@ -145,27 +145,6 @@ def an(file, config, output, language, typst):
             text = extract_text(input_path)
             all_replacements = []  # (variant, pattern, repl, cat, pat)
 
-            fake_first_names = [
-                "Alex",
-                "Jordan",
-                "Taylor",
-                "Casey",
-                "Riley",
-                "Jamie",
-                "Morgan",
-                "Drew",
-            ]
-            fake_last_names = [
-                "Smith",
-                "Johnson",
-                "Williams",
-                "Brown",
-                "Jones",
-                "Garcia",
-                "Miller",
-                "Davis",
-            ]
-
             def generate_fake_digits(length):
                 return "".join(
                     str(random.randint(1 if i == 0 else 0, 9)) for i in range(length)
@@ -197,14 +176,7 @@ def an(file, config, output, language, typst):
                     sorted_variants = sorted(entity.variants, key=len, reverse=True)
 
                     # Category-specific fake setup
-                    if cat == "names":
-                        fake_first = random.choice(fake_first_names)
-                        fake_last = random.choice(fake_last_names)
-                        full = max(entity.variants, key=len)
-                        full_parts = full.split()
-                        presumed_first = full_parts[0] if full_parts else ""
-                        presumed_last = full_parts[-1] if full_parts else ""
-                    elif cat in ["numbers", "cpr"]:
+                    if cat in ["numbers", "cpr"]:
                         if entity.variants:
                             digits = re.sub(r"\D", "", entity.variants[0])
                             fake_digits = generate_fake_digits(len(digits))
@@ -219,30 +191,11 @@ def an(file, config, output, language, typst):
 
                         # Generate fake value
                         if cat == "names":
-                            parts = variant.split()
-                            num_parts = len(parts)
-                            if num_parts == 1:
-                                if variant == presumed_first:
-                                    fake_var = fake_first
-                                elif variant == presumed_last:
-                                    fake_var = fake_last
-                                else:
-                                    fake_var = fake_first
-                            elif num_parts == 2:
-                                if parts[0].endswith(".") and len(parts[0]) < 4:
-                                    fake_var = f"{fake_first[0]}. {fake_last}"
-                                elif parts[1].endswith("."):
-                                    fake_var = f"{fake_first} {fake_last[0]}."
-                                else:
-                                    fake_var = f"{fake_first} {fake_last}"
-                            elif num_parts == 3:
-                                fake_var = f"{fake_first} X. {fake_last}"
-                            else:
-                                fake_var = f"{fake_first} {fake_last}"
+                            fake_var = f"Person{ent_idx} Var{v_idx}"
                         elif cat == "emails":
-                            fake_var = f"fake{ent_idx}@example.com"
+                            fake_var = f"email{ent_idx}var{v_idx}@example.com"
                         elif cat == "addresses":
-                            fake_var = f"123 Fake Street, Anytown {ent_idx}, USA"
+                            fake_var = f"Address{ent_idx} Var{v_idx}"
                         elif cat in ["numbers", "cpr"]:
                             fake_var = apply_format(variant, fake_digits)
                         else:
