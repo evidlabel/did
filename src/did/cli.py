@@ -8,6 +8,7 @@ from pathlib import Path
 from .file_utils import extract_text, anonymize_file, md_to_typst
 from .core.anonymizer import Anonymizer
 import re
+import random
 
 
 @click.group(
@@ -140,8 +141,47 @@ def an(file, config, output, language, typst):
                 "cpr": "cpr_replaced",
             }
             typst_mappings = {}  # var -> real_value
+            fake_mappings = {}  # var -> fake_value
             counts = {k: 0 for k in anonymizer.counts}
             text = extract_text(input_path)
+            all_replacements = []  # (variant, pattern, repl, cat, pat)
+
+            fake_first_names = [
+                "Alex",
+                "Jordan",
+                "Taylor",
+                "Casey",
+                "Riley",
+                "Jamie",
+                "Morgan",
+                "Drew",
+            ]
+            fake_last_names = [
+                "Smith",
+                "Johnson",
+                "Williams",
+                "Brown",
+                "Jones",
+                "Garcia",
+                "Miller",
+                "Davis",
+            ]
+
+            def generate_fake_digits(length):
+                return "".join(
+                    str(random.randint(1 if i == 0 else 0, 9)) for i in range(length)
+                )
+
+            def apply_format(variant, fake_digits):
+                fake = ""
+                d_idx = 0
+                for char in variant:
+                    if char.isdigit():
+                        fake += fake_digits[d_idx]
+                        d_idx += 1
+                    else:
+                        fake += char
+                return fake
 
             for cat in var_counters:
                 prefix = {
@@ -151,34 +191,97 @@ def an(file, config, output, language, typst):
                     "numbers": "N",
                     "cpr": "C",
                 }[cat]
+                entities = getattr(anonymizer.entities, cat)
+                for entity in entities:
+                    var_counters[cat] += 1
+                    ent_idx = var_counters[cat]
+                    sorted_variants = sorted(entity.variants, key=len, reverse=True)
+
+                    # Category-specific fake setup
+                    if cat == "names":
+                        fake_first = random.choice(fake_first_names)
+                        fake_last = random.choice(fake_last_names)
+                        full = max(entity.variants, key=len)
+                        full_parts = full.split()
+                        presumed_first = full_parts[0] if full_parts else ""
+                        presumed_last = full_parts[-1] if full_parts else ""
+                    elif cat in ["numbers", "cpr"]:
+                        if entity.variants:
+                            digits = re.sub(r"\D", "", entity.variants[0])
+                            fake_digits = generate_fake_digits(len(digits))
+                        else:
+                            fake_digits = ""
+                    else:
+                        fake_digits = ""
+
+                    for v_idx, variant in enumerate(sorted_variants, 1):
+                        var = f"{prefix}{ent_idx}V{v_idx}"
+                        typst_mappings[var] = variant
+
+                        # Generate fake value
+                        if cat == "names":
+                            parts = variant.split()
+                            num_parts = len(parts)
+                            if num_parts == 1:
+                                if variant == presumed_first:
+                                    fake_var = fake_first
+                                elif variant == presumed_last:
+                                    fake_var = fake_last
+                                else:
+                                    fake_var = fake_first
+                            elif num_parts == 2:
+                                if parts[0].endswith(".") and len(parts[0]) < 4:
+                                    fake_var = f"{fake_first[0]}. {fake_last}"
+                                elif parts[1].endswith("."):
+                                    fake_var = f"{fake_first} {fake_last[0]}."
+                                else:
+                                    fake_var = f"{fake_first} {fake_last}"
+                            elif num_parts == 3:
+                                fake_var = f"{fake_first} X. {fake_last}"
+                            else:
+                                fake_var = f"{fake_first} {fake_last}"
+                        elif cat == "emails":
+                            fake_var = f"fake{ent_idx}@example.com"
+                        elif cat == "addresses":
+                            fake_var = f"123 Fake Street, Anytown {ent_idx}, USA"
+                        elif cat in ["numbers", "cpr"]:
+                            fake_var = apply_format(variant, fake_digits)
+                        else:
+                            fake_var = "<FAKE>"
+                        fake_mappings[var] = fake_var
+
+                        # Prepare replacement
+                        repl = f"#({var})"
+                        escaped = re.escape(variant)
+                        pattern = (
+                            escaped if cat == "addresses" else r"\b" + escaped + r"\b"
+                        )
+                        all_replacements.append(
+                            (
+                                variant,
+                                pattern,
+                                repl,
+                                cat,
+                                entity.pattern if cat == "numbers" else None,
+                            )
+                        )
+
+            # Sort replacements by variant length descending
+            sorted_replacements = sorted(
+                all_replacements, key=lambda x: len(x[0]), reverse=True
+            )
+
+            # Apply replacements
+            for variant, pattern, repl, cat, pat in sorted_replacements:
+                count = len(re.findall(pattern, text))
                 replaced_key = category_mapping[cat]
                 found_key = replaced_key.replace("_replaced", "_found")
-                entities = getattr(anonymizer.entities, cat)
-                all_variants = []
-                for entity in entities:
-                    for variant in entity.variants:
-                        all_variants.append(
-                            (variant, entity.pattern if cat == "numbers" else None)
-                        )
-                sorted_variants = sorted(
-                    all_variants, key=lambda x: len(x[0]), reverse=True
-                )
-                counter = var_counters[cat]
-                for variant, pat in sorted_variants:
-                    counter += 1
-                    var = f"{prefix}{counter}"
-                    typst_mappings[var] = variant
-                    repl = f"#({var})"
-                    escaped = re.escape(variant)
-                    pattern = escaped if cat == "addresses" else r"\b" + escaped + r"\b"
-                    count = len(re.findall(pattern, text))
-                    counts[found_key] += count
-                    counts[replaced_key] += count
-                    if cat == "numbers" and pat:
-                        counts["patterns_found"] += count
-                        counts["patterns_replaced"] += count
-                    text = re.sub(pattern, repl, text)
-                var_counters[cat] = counter
+                counts[found_key] += count
+                counts[replaced_key] += count
+                if cat == "numbers" and pat:
+                    counts["patterns_found"] += count
+                    counts["patterns_replaced"] += count
+                text = re.sub(pattern, repl, text)
 
             anonymized_text = text
 
@@ -187,10 +290,17 @@ def an(file, config, output, language, typst):
             temp_dir.mkdir(parents=True, exist_ok=True)
             main_path = temp_dir / "main.typ"
             vars_path = temp_dir / "vars.typ"
+            fake_path = temp_dir / "fakevars.typ"
 
             # Write vars.typ
             with open(vars_path, "w", encoding="utf-8") as f:
                 for var, val in typst_mappings.items():
+                    escaped = val.replace("\\", "\\\\").replace('"', '\\"')
+                    f.write(f'#let {var} = "{escaped}"\n')
+
+            # Write fakevars.typ
+            with open(fake_path, "w", encoding="utf-8") as f:
+                for var, val in fake_mappings.items():
                     escaped = val.replace("\\", "\\\\").replace('"', '\\"')
                     f.write(f'#let {var} = "{escaped}"\n')
 
@@ -214,11 +324,18 @@ def an(file, config, output, language, typst):
             click.echo(f"\nTypst files written to {main_path.parent}")
             click.echo(f" - {main_path}")
             click.echo(f" - {vars_path}")
+            click.echo(f" - {fake_path}")
 
             click.echo("\nPreview of vars.typ:")
             with open(vars_path, "r", encoding="utf-8") as f:
                 vars_content = f.read()
             syntax = Syntax(vars_content, "rust")
+            console.print(syntax)
+
+            click.echo("\nPreview of fakevars.typ:")
+            with open(fake_path, "r", encoding="utf-8") as f:
+                fake_content = f.read()
+            syntax = Syntax(fake_content, "rust")
             console.print(syntax)
 
             click.echo("\nPreview of main.typ:")
