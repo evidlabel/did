@@ -7,6 +7,7 @@ from rich.syntax import Syntax
 from pathlib import Path
 from .file_utils import extract_text, anonymize_file, md_to_typst
 from .core.anonymizer import Anonymizer
+import re
 
 
 @click.group(
@@ -23,7 +24,12 @@ def main():
 )
 @click.option("--file", "-f", multiple=True, required=True, help="Input files")
 @click.option("--config", "-c", default="__temp.yaml", help="Output YAML config file")
-@click.option("--language", "-l", default="en", help="Language for entity detection (e.g., 'en', 'da')")
+@click.option(
+    "--language",
+    "-l",
+    default="en",
+    help="Language for entity detection (e.g., 'en', 'da')",
+)
 def ex(file, config, language):
     """Extract entities from text files and generate YAML config."""
     anonymizer = Anonymizer(language=language)
@@ -80,14 +86,27 @@ def ex(file, config, language):
 @click.option("--file", "-f", required=True, help="Input file")
 @click.option("--config", "-c", required=True, help="Config file")
 @click.option("--output", "-o", default=None, help="Output file path")
-@click.option("--language", "-l", default="en", help="Language for entity detection (e.g., 'en', 'da')")
-@click.option("--typst", "-t", type=str, default=None, help="Directory to export Typst files (main.typ and vars.typ) with real entity values.")
+@click.option(
+    "--language",
+    "-l",
+    default="en",
+    help="Language for entity detection (e.g., 'en', 'da')",
+)
+@click.option(
+    "--typst",
+    "-t",
+    type=str,
+    default=None,
+    help="Directory to export Typst files (main.typ and vars.typ) with real entity values.",
+)
 def an(file, config, output, language, typst):
     """Pseudonymize text files using YAML config."""
     anonymizer = Anonymizer(language=language)
     input_path = Path(file)
     if output is None and not typst:
-        output = str(input_path.parent / (input_path.stem + "_anon" + input_path.suffix))
+        output = str(
+            input_path.parent / (input_path.stem + "_anon" + input_path.suffix)
+        )
     output_path = Path(output) if output else None
     try:
         click.echo("=" * 20)
@@ -100,10 +119,12 @@ def an(file, config, output, language, typst):
 
         if typst:
             if input_path.suffix not in [".md", ".txt"]:
-                click.echo("Typst export currently supported only for .md and .txt files.")
+                click.echo(
+                    "Typst export currently supported only for .md and .txt files."
+                )
                 raise click.Abort()
 
-            # Generate Typst mappings and real values
+            # Generate Typst mappings and real values per variant
             var_counters = {
                 "names": 0,
                 "emails": 0,
@@ -111,26 +132,55 @@ def an(file, config, output, language, typst):
                 "numbers": 0,
                 "cpr": 0,
             }
+            category_mapping = {
+                "names": "names_replaced",
+                "emails": "emails_replaced",
+                "addresses": "addresses_replaced",
+                "numbers": "numbers_replaced",
+                "cpr": "cpr_replaced",
+            }
             typst_mappings = {}  # var -> real_value
-            for cat in var_counters:
-                prefix = {"names": "P", "emails": "E", "addresses": "A", "numbers": "N", "cpr": "C"}[cat]
-                for entity in getattr(anonymizer.entities, cat):
-                    var_counters[cat] += 1
-                    var = f"{prefix}{var_counters[cat]}"
-                    real_val = max(entity.variants, key=len)
-                    typst_mappings[var] = real_val
-                    entity._original_id = entity.id
-                    entity.id = f"#{var}"
-
-            # Anonymize text
+            counts = {k: 0 for k in anonymizer.counts}
             text = extract_text(input_path)
-            anonymized_text, field_counts = anonymizer.anonymize(text)
 
-            # Restore original ids
             for cat in var_counters:
-                for entity in getattr(anonymizer.entities, cat):
-                    entity.id = entity._original_id
-                    del entity._original_id
+                prefix = {
+                    "names": "P",
+                    "emails": "E",
+                    "addresses": "A",
+                    "numbers": "N",
+                    "cpr": "C",
+                }[cat]
+                replaced_key = category_mapping[cat]
+                found_key = replaced_key.replace("_replaced", "_found")
+                entities = getattr(anonymizer.entities, cat)
+                all_variants = []
+                for entity in entities:
+                    for variant in entity.variants:
+                        all_variants.append(
+                            (variant, entity.pattern if cat == "numbers" else None)
+                        )
+                sorted_variants = sorted(
+                    all_variants, key=lambda x: len(x[0]), reverse=True
+                )
+                counter = var_counters[cat]
+                for variant, pat in sorted_variants:
+                    counter += 1
+                    var = f"{prefix}{counter}"
+                    typst_mappings[var] = variant
+                    repl = f"#({var})"
+                    escaped = re.escape(variant)
+                    pattern = escaped if cat == "addresses" else r"\b" + escaped + r"\b"
+                    count = len(re.findall(pattern, text))
+                    counts[found_key] += count
+                    counts[replaced_key] += count
+                    if cat == "numbers" and pat:
+                        counts["patterns_found"] += count
+                        counts["patterns_replaced"] += count
+                    text = re.sub(pattern, repl, text)
+                var_counters[cat] = counter
+
+            anonymized_text = text
 
             # Create output paths
             temp_dir = Path(typst)
@@ -151,8 +201,6 @@ def an(file, config, output, language, typst):
                     f.write(md_to_typst(anonymized_text))
                 else:
                     f.write(anonymized_text)
-
-            counts = field_counts
 
             click.echo("Replacement counts:")
             click.echo(f"  Names replaced: {counts['names_replaced']}")
