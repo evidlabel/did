@@ -22,7 +22,7 @@ class HighDigitDensityRecognizer(EntityRecognizer):
             window = text[i : i + self.window_size]
             digit_count = sum(1 for c in window if c.isdigit())
             density = digit_count / len(window)
-            if digit_count >= self.min_digits and density > self.density_threshold:
+            if digit_count >= self.min_digits and density >= self.density_threshold:
                 intervals.append((i, i + self.window_size))
 
         # Merge overlapping intervals

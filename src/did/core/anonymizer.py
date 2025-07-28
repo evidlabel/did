@@ -45,7 +45,7 @@ class Anonymizer:
         self.analyzer.registry.add_recognizer(
             PatternRecognizer(supported_entity="CPR_NUMBER", patterns=[cpr_pattern])
         )
-        self.analyzer.registry.add_recognizer(HighDigitDensityRecognizer(min_digits=4, window_size=12, density_threshold=0.4))
+        self.analyzer.registry.add_recognizer(HighDigitDensityRecognizer(min_digits=3, window_size=10, density_threshold=0.3))
         self.analyzer.registry.add_recognizer(GeneralNumberRecognizer())
 
     def preprocess_text(self, text: str):
@@ -101,6 +101,7 @@ class Anonymizer:
                     "NUMBER",
                     "PHONE_NUMBER",
                     "CPR_NUMBER",
+                    "DATE_TIME",
                 ],
                 language=self.language,
             )
@@ -120,7 +121,7 @@ class Anonymizer:
                     all_cpr.append(entity_text)
                     self.counts["cpr_found"] += 1
                 if (
-                    result.entity_type in ["NUMBER", "PHONE_NUMBER"]
+                    result.entity_type in ["NUMBER", "PHONE_NUMBER", "DATE_TIME"]
                     and entity_text not in all_numbers
                     and entity_text not in all_cpr
                 ):
