@@ -35,6 +35,32 @@ def is_valid_name(name: str) -> bool:
     )
 
 
+def is_possible_variant(short_name: str, full_name: str) -> bool:
+    """Check if short_name is a possible variant of full_name."""
+    short_norm = normalize_name(short_name)
+    full_norm = normalize_name(full_name)
+    short_parts = short_norm.split()
+    full_parts = full_norm.split()
+    if len(short_parts) >= len(full_parts) or len(short_parts) == 0:
+        return False
+    j = 0
+    for sp in short_parts:
+        found = False
+        while j < len(full_parts) and not found:
+            fp = full_parts[j]
+            if sp == fp:
+                found = True
+                j += 1
+            elif sp.endswith('.') and len(sp) <= 4 and fp.startswith(sp[0]):
+                found = True
+                j += 1
+            else:
+                j += 1
+        if not found:
+            return False
+    return True
+
+
 def find_name_variants(names: list, threshold: float = 85) -> list:
     """Group similar names using vectorized rapidfuzz."""
     if not names:
@@ -59,7 +85,35 @@ def find_name_variants(names: list, threshold: float = 85) -> list:
                 visited[j] = True
         if variants:
             grouped_names.append(variants)
-    return grouped_names
+    # Postprocessing: merge short variants into unique matching core groups
+    current_groups = [list(g) for g in grouped_names]
+    current_groups.sort(key=lambda g: max(len(name) for name in g), reverse=True)
+    merges = {}  # target_core: list of small_indices
+    for small_idx in range(1, len(current_groups)):
+        small_rep = max(current_groups[small_idx], key=len)
+        possible_cores = []
+        for core_idx in range(small_idx):
+            core_rep = max(current_groups[core_idx], key=len)
+            if is_possible_variant(small_rep, core_rep):
+                possible_cores.append(core_idx)
+        if len(possible_cores) == 1:
+            target = possible_cores[0]
+            if target not in merges:
+                merges[target] = []
+            merges[target].append(small_idx)
+    # Apply merges
+    new_groups = []
+    indices_to_skip = set()
+    for idx in range(len(current_groups)):
+        if idx in indices_to_skip:
+            continue
+        group = current_groups[idx][:]
+        if idx in merges:
+            for small_idx in merges[idx]:
+                group.extend(current_groups[small_idx])
+                indices_to_skip.add(small_idx)
+        new_groups.append(group)
+    return new_groups
 
 
 def find_number_variants(numbers: list, threshold: float = 80) -> list:
