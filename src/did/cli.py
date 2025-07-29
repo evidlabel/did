@@ -31,7 +31,7 @@ def main():
     default="en",
     help="Language for entity detection (e.g., 'en', 'da')",
 )
-def ex(file, config, language):
+def extract(file, config, language):
     """Extract entities from text files and generate YAML config."""
     anonymizer = Anonymizer(language=language)
     console = Console()
@@ -81,7 +81,7 @@ def ex(file, config, language):
 
 
 @main.command(
-    help="Anonymize input text file using a YAML configuration and save the result."
+    help="Pseudonymize input text file using a YAML configuration and save the result."
 )
 @click.option("--file", "-f", required=True, help="Input file")
 @click.option("--config", "-c", required=True, help="Config file")
@@ -99,7 +99,7 @@ def ex(file, config, language):
     default=None,
     help="Directory to export Typst files (main.typ and vars.typ) with real entity values.",
 )
-def an(file, config, output, language, typst):
+def pseudo(file, config, output, language, typst):
     """Pseudonymize text files using YAML config."""
     anonymizer = Anonymizer(language=language)
     input_path = Path(file)
