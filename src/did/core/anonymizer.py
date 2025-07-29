@@ -9,7 +9,9 @@ from presidio_analyzer.nlp_engine import SpacyNlpEngine
 from .models import Config, Entity
 from ..utils import find_name_variants, find_number_variants
 from .number_detector import HighDigitDensityRecognizer
+
 # from .general_number_detector import GeneralNumberRecognizer
+from collections import defaultdict
 
 
 class Anonymizer:
@@ -31,30 +33,30 @@ class Anonymizer:
             nlp_engine=nlp_engine, supported_languages=[language]
         )
 
+        print("Adding custom recognizers...")
+        # Add custom recognizers
+        cpr_pattern = Pattern(name="CPR_NUMBER", regex=r"\b\d{6}-\d{4}\b", score=0.95)
+        self.analyzer.registry.add_recognizer(
+            PatternRecognizer(supported_entity="CPR_NUMBER", patterns=[cpr_pattern])
+        )
+
+        self.analyzer.registry.add_recognizer(HighDigitDensityRecognizer())
+        # self.analyzer.registry.add_recognizer(GeneralNumberRecognizer())
+
         self.counts = {
-            "names_found": 0,
-            "names_replaced": 0,
-            "emails_found": 0,
-            "emails_replaced": 0,
-            "addresses_found": 0,
-            "addresses_replaced": 0,
-            "numbers_found": 0,
-            "numbers_replaced": 0,
-            "cpr_found": 0,
-            "cpr_replaced": 0,
+            "person_found": 0,
+            "person_replaced": 0,
+            "email_address_found": 0,
+            "email_address_replaced": 0,
+            "location_found": 0,
+            "location_replaced": 0,
+            "number_found": 0,
+            "number_replaced": 0,
+            "cpr_number_found": 0,
+            "cpr_number_replaced": 0,
         }
         self.entities: Config = Config()
         self.language = language
-
-        print("Adding custom recognizers...")
-        # Add custom recognizers
-        # cpr_pattern = Pattern(name="CPR_NUMBER", regex=r"\d{6}-\d{4}", score=0.95)
-        # self.analyzer.registry.add_recognizer(
-        #     PatternRecognizer(supported_entity="CPR_NUMBER", patterns=[cpr_pattern])
-        # )
-
-        # self.analyzer.registry.add_recognizer(HighDigitDensityRecognizer())
-        # self.analyzer.registry.add_recognizer(GeneralNumberRecognizer())
 
     def preprocess_text(self, text: str):
         """Preprocess text to join hyphenated multi-line words for detection."""
@@ -92,28 +94,28 @@ class Anonymizer:
 
     def detect_entities(self, texts: list):
         """Detect entities in multiple texts using Presidio."""
-        name_count = 1
-        email_count = 1
-        address_count = 1
-        number_count = 1
-        cpr_count = 1
-        all_names = []
-        all_emails = []
-        all_addresses = []
-        all_numbers = []
-        all_cpr = []
+        type_mapping = {
+            "PERSON": "person",
+            "EMAIL_ADDRESS": "email_address",
+            "LOCATION": "location",
+            "NUMBER": "number",
+            "PHONE_NUMBER": "phone",
+            "DATE_TIME": "date_time",
+            "CPR_NUMBER": "cpr_number",
+        }
+        all_entities = defaultdict(list)
         for text in texts:
             detection_text, map_to_original = self.preprocess_text(text)
             results = self.analyzer.analyze(
                 text=detection_text,
                 entities=[
                     "PERSON",
-                    # "EMAIL_ADDRESS",
+                    "EMAIL_ADDRESS",
                     "LOCATION",
-                    # "NUMBER",
-                    # "PHONE_NUMBER",
-                    # "CPR_NUMBER",
-                    # "DATE_TIME",
+                    "NUMBER",
+                    "PHONE_NUMBER",
+                    "CPR_NUMBER",
+                    "DATE_TIME",
                 ],
                 language=self.language,
             )
@@ -128,62 +130,35 @@ class Anonymizer:
                         f"String index out of range error: o_start={o_start}, o_end={o_end}, len(text)={len(text)}"
                     )  # Log the error
                     entity_text = ""  # Set to empty string to continue
-                if result.entity_type == "PERSON" and entity_text not in all_names:
-                    all_names.append(entity_text)
-                    self.counts["names_found"] += 1
-                if (
-                    result.entity_type == "EMAIL_ADDRESS"
-                    and entity_text not in all_emails
-                ):
-                    all_emails.append(entity_text)
-                    self.counts["emails_found"] += 1
-                if (
-                    result.entity_type == "LOCATION"
-                    and entity_text not in all_addresses
-                ):
-                    all_addresses.append(entity_text)
-                    self.counts["addresses_found"] += 1
-                if result.entity_type == "CPR_NUMBER" and entity_text not in all_cpr:
-                    all_cpr.append(entity_text)
-                    self.counts["cpr_found"] += 1
-                if (
-                    result.entity_type in ["NUMBER", "PHONE_NUMBER", "DATE_TIME"]
-                    and entity_text not in all_numbers
-                    and entity_text not in all_cpr
-                ):
-                    all_numbers.append(entity_text)
-                    self.counts["numbers_found"] += 1
-        grouped_names = find_name_variants(all_names)
-        for variants in grouped_names:
-            self.entities.names.append(
-                Entity(id=f"<PERSON_{name_count}>", variants=variants)
-            )
-            name_count += 1
-        for email in all_emails:
-            self.entities.emails.append(
-                Entity(id=f"<EMAIL_ADDRESS_{email_count}>", variants=[email])
-            )
-            email_count += 1
-        for address in all_addresses:
-            self.entities.addresses.append(
-                Entity(id=f"<ADDRESS_{address_count}>", variants=[address])
-            )
-            address_count += 1
-        grouped_numbers = find_number_variants(all_numbers)
-        for variants in grouped_numbers:
-            self.entities.numbers.append(
-                Entity(id=f"<NUMBER_{number_count}>", variants=variants)
-            )
-            number_count += 1
-        for cpr in all_cpr:
-            self.entities.cpr.append(
-                Entity(id=f"<CPR_NUMBER_{cpr_count}>", variants=[cpr])
-            )
-            cpr_count += 1
+                ent_type = result.entity_type
+                if ent_type in type_mapping:
+                    mapped = type_mapping[ent_type]
+                    if entity_text and entity_text not in all_entities[mapped]:
+                        all_entities[mapped].append(entity_text)
+                        self.counts[f"{mapped}_found"] += 1
+
+        # Process groupings
+        for cat in ["person", "email_address", "location", "number", "cpr_number"]:
+            items = all_entities.get(cat, [])
+            if cat == "person":
+                grouped = find_name_variants(items)
+            elif cat == "number":
+                grouped = find_number_variants(items)
+            else:
+                grouped = [[item] for item in items if item]
+            count = 1
+            for variants in grouped:
+                ent_type_upper = cat.upper() if cat != "cpr_number" else "CPR_NUMBER"
+                if cat == "email_address":
+                    ent_type_upper = "EMAIL_ADDRESS"
+                getattr(self.entities, cat).append(
+                    Entity(id=f"<{ent_type_upper}_{count}>", variants=variants)
+                )
+                count += 1
 
     def generate_yaml(self) -> str:
         """Generate YAML configuration from detected entities with all strings quoted."""
-        data = self.entities.model_dump(exclude_none=True)
+        data = self.entities.model_dump(by_alias=True, exclude_none=True)
 
         # Function to recursively quote all strings
         def quote_strings(obj):
@@ -211,11 +186,13 @@ class Anonymizer:
         """Anonymize text by replacing known variants from config with their IDs."""
         self.counts = {k: 0 for k in self.counts}
         category_mapping = {
-            "names": "names_replaced",
-            "emails": "emails_replaced",
-            "addresses": "addresses_replaced",
-            "numbers": "numbers_replaced",
-            "cpr": "cpr_replaced",
+            "person": "person_replaced",
+            "email_address": "email_address_replaced",
+            "location": "location_replaced",
+            "number": "number_replaced",
+            "date_time": "date_time_replaced",
+            "phone": "phone_replaced",
+            "cpr_number": "cpr_number_replaced",
         }
         for cat, replaced_key in category_mapping.items():
             found_key = replaced_key.replace("_replaced", "_found")
@@ -224,9 +201,9 @@ class Anonymizer:
                 sorted_variants = sorted(entity.variants, key=len, reverse=True)
                 for variant in sorted_variants:
                     escaped = re.escape(variant)
-                    if cat in ["names", "numbers", "cpr"] and "\n" in variant:
+                    if cat in ["person", "number", "cpr_number"] and "\n" in variant:
                         pattern = escaped
-                    elif cat == "addresses":
+                    elif cat == "location":
                         pattern = escaped
                     else:
                         pattern = r"\b" + escaped + r"\b"
@@ -234,7 +211,9 @@ class Anonymizer:
                     self.counts[found_key] += count
                     self.counts[replaced_key] += count
                     replacement = (
-                        f'"{entity.id}"' if cat in ["numbers", "cpr"] else entity.id
+                        f'"{entity.id}"'
+                        if cat in ["number", "cpr_number"]
+                        else entity.id
                     )
                     # Surround with quotes for numbers and CPR
                     text = re.sub(pattern, replacement, text)

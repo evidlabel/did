@@ -12,8 +12,8 @@ class Entity(BaseModel):
 
 class Config(BaseModel):
     """Overall configuration model for entities."""
-    names: list[Entity] = Field(default_factory=list)
-    emails: list[Entity] = Field(default_factory=list)
-    addresses: list[Entity] = Field(default_factory=list)
-    numbers: list[Entity] = Field(default_factory=list)
-    cpr: list[Entity] = Field(default_factory=list)
+    person: list[Entity] = Field(alias="PERSON", default_factory=list)
+    email_address: list[Entity] = Field(alias="EMAIL_ADDRESS", default_factory=list)
+    location: list[Entity] = Field(alias="LOCATION", default_factory=list)
+    number: list[Entity] = Field(alias="NUMBER", default_factory=list)
+    cpr_number: list[Entity] = Field(alias="CPR_NUMBER", default_factory=list)

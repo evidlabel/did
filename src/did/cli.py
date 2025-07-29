@@ -51,11 +51,11 @@ def extract(file, config, language):
             anonymizer.detect_entities(texts)
 
         click.echo("Detected entities:")
-        click.echo(f"  Names found: {anonymizer.counts['names_found']}")
-        click.echo(f"  Emails found: {anonymizer.counts['emails_found']}")
-        click.echo(f"  Addresses found: {anonymizer.counts['addresses_found']}")
-        click.echo(f"  Numbers found: {anonymizer.counts['numbers_found']}")
-        click.echo(f"  CPR found: {anonymizer.counts['cpr_found']}")
+        click.echo(f"  PERSON found: {anonymizer.counts['person_found']}")
+        click.echo(f"  EMAIL_ADDRESS found: {anonymizer.counts['email_address_found']}")
+        click.echo(f"  LOCATION found: {anonymizer.counts['location_found']}")
+        click.echo(f"  NUMBER found: {anonymizer.counts['number_found']}")
+        click.echo(f"  CPR_NUMBER found: {anonymizer.counts['cpr_number_found']}")
 
         yaml_str = anonymizer.generate_yaml()
         click.echo("Writing YAML config...")
@@ -127,18 +127,18 @@ def pseudo(file, config, output, language, typst):
 
             # Generate Typst mappings and real values per variant
             var_counters = {
-                "names": 0,
-                "emails": 0,
-                "addresses": 0,
-                "numbers": 0,
-                "cpr": 0,
+                "person": 0,
+                "email_address": 0,
+                "location": 0,
+                "number": 0,
+                "cpr_number": 0,
             }
             category_mapping = {
-                "names": "names_replaced",
-                "emails": "emails_replaced",
-                "addresses": "addresses_replaced",
-                "numbers": "numbers_replaced",
-                "cpr": "cpr_replaced",
+                "person": "person_replaced",
+                "email_address": "email_address_replaced",
+                "location": "location_replaced",
+                "number": "number_replaced",
+                "cpr_number": "cpr_number_replaced",
             }
             typst_mappings = {}  # var -> real_value
             fake_mappings = {}  # var -> fake_value
@@ -168,11 +168,11 @@ def pseudo(file, config, output, language, typst):
 
             for cat in var_counters:
                 prefix = {
-                    "names": "P",
-                    "emails": "E",
-                    "addresses": "A",
-                    "numbers": "N",
-                    "cpr": "C",
+                    "person": "P",
+                    "email_address": "E",
+                    "location": "A",
+                    "number": "N",
+                    "cpr_number": "C",
                 }[cat]
                 entities = getattr(anonymizer.entities, cat)
                 for entity in entities:
@@ -181,7 +181,7 @@ def pseudo(file, config, output, language, typst):
                     sorted_variants = sorted(entity.variants, key=len, reverse=True)
 
                     # Category-specific fake setup with max digit length
-                    if cat in ["numbers", "cpr"]:
+                    if cat in ["number", "cpr_number"]:
                         if entity.variants:
                             max_digit_len = max(
                                 len(re.sub(r"\D", "", v)) for v in entity.variants
@@ -197,13 +197,13 @@ def pseudo(file, config, output, language, typst):
                         typst_mappings[var] = variant
 
                         # Generate fake value
-                        if cat == "names":
+                        if cat == "person":
                             fake_var = f"Person{ent_idx} Var{v_idx}"
-                        elif cat == "emails":
+                        elif cat == "email_address":
                             fake_var = f"email{ent_idx}var{v_idx}@example.com"
-                        elif cat == "addresses":
+                        elif cat == "location":
                             fake_var = f"Address{ent_idx} Var{v_idx}"
-                        elif cat in ["numbers", "cpr"]:
+                        elif cat in ["number", "cpr_number"]:
                             fake_var = apply_format(variant, fake_digits)
                         else:
                             fake_var = "<FAKE>"
@@ -213,7 +213,7 @@ def pseudo(file, config, output, language, typst):
                         repl = f"#({var})"
                         escaped = re.escape(variant)
                         pattern = (
-                            escaped if cat == "addresses" else r"\b" + escaped + r"\b"
+                            escaped if cat == "location" else r"\b" + escaped + r"\b"
                         )
                         all_replacements.append(
                             (
@@ -221,7 +221,7 @@ def pseudo(file, config, output, language, typst):
                                 pattern,
                                 repl,
                                 cat,
-                                entity.pattern if cat == "numbers" else None,
+                                entity.pattern if cat == "number" else None,
                             )
                         )
 
@@ -269,11 +269,11 @@ def pseudo(file, config, output, language, typst):
                     f.write(anonymized_text)
 
             click.echo("Replacement counts:")
-            click.echo(f"  Names replaced: {counts['names_replaced']}")
-            click.echo(f"  Emails replaced: {counts['emails_replaced']}")
-            click.echo(f"  Addresses replaced: {counts['addresses_replaced']}")
-            click.echo(f"  Numbers replaced: {counts['numbers_replaced']}")
-            click.echo(f"  CPR replaced: {counts['cpr_replaced']}")
+            click.echo(f"  PERSON replaced: {counts['person_replaced']}")
+            click.echo(f"  EMAIL_ADDRESS replaced: {counts['email_address_replaced']}")
+            click.echo(f"  LOCATION replaced: {counts['location_replaced']}")
+            click.echo(f"  NUMBER replaced: {counts['number_replaced']}")
+            click.echo(f"  CPR_NUMBER replaced: {counts['cpr_number_replaced']}")
 
             console = Console()
             click.echo(f"\nTypst files written to {main_path.parent}")
@@ -303,11 +303,11 @@ def pseudo(file, config, output, language, typst):
             counts = anonymize_file(input_path, anonymizer, output_path)
 
             click.echo("Replacement counts:")
-            click.echo(f"  Names replaced: {counts['names_replaced']}")
-            click.echo(f"  Emails replaced: {counts['emails_replaced']}")
-            click.echo(f"  Addresses replaced: {counts['addresses_replaced']}")
-            click.echo(f"  Numbers replaced: {counts['numbers_replaced']}")
-            click.echo(f"  CPR replaced: {counts['cpr_replaced']}")
+            click.echo(f"  PERSON replaced: {counts['person_replaced']}")
+            click.echo(f"  EMAIL_ADDRESS replaced: {counts['email_address_replaced']}")
+            click.echo(f"  LOCATION replaced: {counts['location_replaced']}")
+            click.echo(f"  NUMBER replaced: {counts['number_replaced']}")
+            click.echo(f"  CPR_NUMBER replaced: {counts['cpr_number_replaced']}")
 
             console = Console()
             with open(output_path, "r", encoding="utf-8") as f:
