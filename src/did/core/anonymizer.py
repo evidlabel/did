@@ -9,7 +9,7 @@ from presidio_analyzer.nlp_engine import SpacyNlpEngine
 from .models import Config, Entity
 from ..utils import find_name_variants, find_number_variants
 from .number_detector import HighDigitDensityRecognizer
-from .general_number_detector import GeneralNumberRecognizer
+# from .general_number_detector import GeneralNumberRecognizer
 
 
 class Anonymizer:
@@ -24,8 +24,12 @@ class Anonymizer:
         else:
             raise ValueError(f"Unsupported language: {language}")
 
-        nlp_engine = SpacyNlpEngine(models=[{"lang_code": language, "model_name": spacy_model}])
-        self.analyzer = AnalyzerEngine(nlp_engine=nlp_engine, supported_languages=[language])
+        nlp_engine = SpacyNlpEngine(
+            models=[{"lang_code": language, "model_name": spacy_model}]
+        )
+        self.analyzer = AnalyzerEngine(
+            nlp_engine=nlp_engine, supported_languages=[language]
+        )
 
         self.counts = {
             "names_found": 0,
@@ -42,13 +46,15 @@ class Anonymizer:
         self.entities: Config = Config()
         self.language = language
 
+        print("Adding custom recognizers...")
         # Add custom recognizers
-        cpr_pattern = Pattern(name="CPR_NUMBER", regex=r"\b\d{6}-\d{4}\b", score=0.95)
-        self.analyzer.registry.add_recognizer(
-            PatternRecognizer(supported_entity="CPR_NUMBER", patterns=[cpr_pattern])
-        )
-        self.analyzer.registry.add_recognizer(HighDigitDensityRecognizer())
-        self.analyzer.registry.add_recognizer(GeneralNumberRecognizer())
+        # cpr_pattern = Pattern(name="CPR_NUMBER", regex=r"\d{6}-\d{4}", score=0.95)
+        # self.analyzer.registry.add_recognizer(
+        #     PatternRecognizer(supported_entity="CPR_NUMBER", patterns=[cpr_pattern])
+        # )
+
+        # self.analyzer.registry.add_recognizer(HighDigitDensityRecognizer())
+        # self.analyzer.registry.add_recognizer(GeneralNumberRecognizer())
 
     def preprocess_text(self, text: str):
         """Preprocess text to join hyphenated multi-line words for detection."""
@@ -75,7 +81,11 @@ class Anonymizer:
             if d_start >= len(positions):
                 return len(text), len(text)
             o_start = positions[d_start]
-            o_end = positions[d_end - 1] + 1 if d_end > 0 and d_end <= len(positions) else len(text)
+            o_end = (
+                positions[d_end - 1] + 1
+                if d_end > 0 and d_end <= len(positions)
+                else len(text)
+            )
             return o_start, o_end
 
         return detection_text, map_to_original
@@ -98,29 +108,39 @@ class Anonymizer:
                 text=detection_text,
                 entities=[
                     "PERSON",
-                    "EMAIL_ADDRESS",
+                    # "EMAIL_ADDRESS",
                     "LOCATION",
-                    "NUMBER",
-                    "PHONE_NUMBER",
-                    "CPR_NUMBER",
-                    "DATE_TIME",
+                    # "NUMBER",
+                    # "PHONE_NUMBER",
+                    # "CPR_NUMBER",
+                    # "DATE_TIME",
                 ],
                 language=self.language,
             )
             for result in results:
                 o_start, o_end = map_to_original(result.start, result.end)
                 try:
-                    entity_text = text[o_start:o_end]  # Added try-except for error handling
+                    entity_text = text[
+                        o_start:o_end
+                    ]  # Added try-except for error handling
                 except IndexError:
-                    print(f"String index out of range error: o_start={o_start}, o_end={o_end}, len(text)={len(text)}")  # Log the error
+                    print(
+                        f"String index out of range error: o_start={o_start}, o_end={o_end}, len(text)={len(text)}"
+                    )  # Log the error
                     entity_text = ""  # Set to empty string to continue
                 if result.entity_type == "PERSON" and entity_text not in all_names:
                     all_names.append(entity_text)
                     self.counts["names_found"] += 1
-                if result.entity_type == "EMAIL_ADDRESS" and entity_text not in all_emails:
+                if (
+                    result.entity_type == "EMAIL_ADDRESS"
+                    and entity_text not in all_emails
+                ):
                     all_emails.append(entity_text)
                     self.counts["emails_found"] += 1
-                if result.entity_type == "LOCATION" and entity_text not in all_addresses:
+                if (
+                    result.entity_type == "LOCATION"
+                    and entity_text not in all_addresses
+                ):
                     all_addresses.append(entity_text)
                     self.counts["addresses_found"] += 1
                 if result.entity_type == "CPR_NUMBER" and entity_text not in all_cpr:
@@ -164,7 +184,7 @@ class Anonymizer:
     def generate_yaml(self) -> str:
         """Generate YAML configuration from detected entities with all strings quoted."""
         data = self.entities.model_dump(exclude_none=True)
-        
+
         # Function to recursively quote all strings
         def quote_strings(obj):
             if isinstance(obj, dict):
@@ -175,9 +195,9 @@ class Anonymizer:
                 return DoubleQuotedScalarString(obj)  # Wrap strings in double quotes
             else:
                 return obj  # Leave other types as is
-        
+
         quoted_data = quote_strings(data)  # Apply quoting to data
-        
+
         yaml_instance = YAML()  # Create YAML instance
         stream = io.StringIO()  # Use StringIO for string output
         yaml_instance.dump(quoted_data, stream)  # Dump the quoted data
@@ -213,6 +233,9 @@ class Anonymizer:
                     count = len(re.findall(pattern, text))
                     self.counts[found_key] += count
                     self.counts[replaced_key] += count
-                    replacement = f'"{entity.id}"' if cat in ["numbers", "cpr"] else entity.id  # Surround with quotes for numbers and CPR
+                    replacement = (
+                        f'"{entity.id}"' if cat in ["numbers", "cpr"] else entity.id
+                    )
+                    # Surround with quotes for numbers and CPR
                     text = re.sub(pattern, replacement, text)
         return text, self.counts
