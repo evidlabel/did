@@ -62,10 +62,7 @@ def test_anonymize_number_variants(anonymizer):
     yaml_obj = yaml.YAML()
     config = yaml_obj.load(config_str)
     assert any("1234567890" in entry["variants"] for entry in config["numbers"])
-    assert any(
-        "12 34 56 78" in entry["variants"]
-        for entry in config["numbers"]
-    )
+    assert any("12 34 56 78" in entry["variants"] for entry in config["numbers"])
     result, counts = anonymizer.anonymize(text)
     assert "<NUMBER_" in result
     assert counts["numbers_found"] >= 3
@@ -83,7 +80,7 @@ def test_anonymize_address(anonymizer):
 
 def test_anonymize_danish_address():
     anonymizer = Anonymizer(language="da")
-    text = "Bor på Søndergade 14,1.tv, 8600 Silkeborg"
+    text = "Bor på Langelandsgade 14, 1.tv, 7300 Jelling"
     anonymizer.detect_entities([text])
     assert anonymizer.counts["addresses_found"] >= 1
     anonymizer.load_replacements(anonymizer.entities.model_dump(exclude_none=True))
@@ -123,10 +120,10 @@ def test_anonymize_mixed_content(anonymizer):
 def test_cli_extract(runner, tmp_path):
     input_file = tmp_path / "input.md"
     config_file = tmp_path / "config.yaml"
-    input_file.write_text(
-        "Hello John Doe and Jon Doe, CPR: 123456-1234"
+    input_file.write_text("Hello John Doe and Jon Doe, CPR: 123456-1234")
+    result = runner.invoke(
+        main, ["ex", "--file", str(input_file), "--config", str(config_file)]
     )
-    result = runner.invoke(main, ["ex", "--file", str(input_file), "--config", str(config_file)])
     assert result.exit_code == 0
     assert "Names found: 2" in result.output  # Grouped
     assert "CPR found: 1" in result.output
@@ -135,9 +132,7 @@ def test_cli_extract(runner, tmp_path):
     with open(config_file, "r") as f:
         config = yaml_obj.load(f)  # Load using YAML object
         assert len(config["names"]) >= 1
-        assert any(
-            "123456-1234" in entry["variants"] for entry in config["cpr"]
-        )
+        assert any("123456-1234" in entry["variants"] for entry in config["cpr"])
 
 
 def test_cli_anonymize(runner, tmp_path):
@@ -151,11 +146,23 @@ def test_cli_anonymize(runner, tmp_path):
     runner.invoke(main, ["ex", "--file", str(input_file), "--config", str(config_file)])
 
     # Modify the input file to add new content
-    modified_text = original_text + " and John Doe again, and new person Alice, new CPR: 987654-4321"
+    modified_text = (
+        original_text
+        + " and John Doe again, and new person Alice, new CPR: 987654-4321"
+    )
     input_file.write_text(modified_text)
 
     result = runner.invoke(
-        main, ["an", "--file", str(input_file), "--config", str(config_file), "--output", str(output_file)]
+        main,
+        [
+            "an",
+            "--file",
+            str(input_file),
+            "--config",
+            str(config_file),
+            "--output",
+            str(output_file),
+        ],
     )
     assert result.exit_code == 0
     assert "Names replaced: 3" in result.output

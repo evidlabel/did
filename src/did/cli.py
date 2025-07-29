@@ -156,8 +156,12 @@ def pseudo(file, config, output, language, typst):
                 d_idx = 0
                 for char in variant:
                     if char.isdigit():
-                        fake += fake_digits[d_idx]
-                        d_idx += 1
+                        if d_idx < len(fake_digits):
+                            fake += fake_digits[d_idx]
+                            d_idx += 1
+                        else:
+                            # Fallback for unexpected longer variants
+                            fake += str(random.randint(0, 9))
                     else:
                         fake += char
                 return fake
@@ -176,11 +180,13 @@ def pseudo(file, config, output, language, typst):
                     ent_idx = var_counters[cat]
                     sorted_variants = sorted(entity.variants, key=len, reverse=True)
 
-                    # Category-specific fake setup
+                    # Category-specific fake setup with max digit length
                     if cat in ["numbers", "cpr"]:
                         if entity.variants:
-                            digits = re.sub(r"\D", "", entity.variants[0])
-                            fake_digits = generate_fake_digits(len(digits))
+                            max_digit_len = max(
+                                len(re.sub(r"\D", "", v)) for v in entity.variants
+                            )
+                            fake_digits = generate_fake_digits(max_digit_len)
                         else:
                             fake_digits = ""
                     else:
