@@ -69,7 +69,7 @@ class Anonymizer:
         conf = {
             "nlp_engine_name": "spacy",
             "models": [
-                {"lang_code": "da", "model_name": f"da_core_news_md"},
+                {"lang_code": "da", "model_name": "da_core_news_md"},
                 {"lang_code": "en", "model_name": "en_core_web_md"},
             ],
             "ner_model_configuration": {

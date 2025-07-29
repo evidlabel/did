@@ -236,9 +236,20 @@ def pseudo(file, config, output, language, typst):
                         # Prepare replacement
                         repl = f"#({var})"
                         escaped = re.escape(variant)
-                        pattern = (
-                            escaped if cat == "location" else r"\b" + escaped + r"\b"
-                        )
+                        if cat in [
+                            "person",
+                            "phone_number",
+                            "date_number",
+                            "id_number",
+                            "code_number",
+                            "general_number",
+                            "cpr_number",
+                        ] and "\n" in variant:
+                            pattern = escaped
+                        elif cat == "location":
+                            pattern = escaped
+                        else:
+                            pattern = r"\b" + escaped + r"\b"
                         all_replacements.append(
                             (
                                 variant,
