@@ -47,7 +47,7 @@ class Anonymizer:
         self.analyzer.registry.add_recognizer(
             PatternRecognizer(supported_entity="CPR_NUMBER", patterns=[cpr_pattern])
         )
-        self.analyzer.registry.add_recognizer(HighDigitDensityRecognizer(min_digits=3, window_size=10, density_threshold=0.3))
+        self.analyzer.registry.add_recognizer(HighDigitDensityRecognizer())
         self.analyzer.registry.add_recognizer(GeneralNumberRecognizer())
 
     def preprocess_text(self, text: str):

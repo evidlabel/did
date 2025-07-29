@@ -12,8 +12,8 @@ class GeneralNumberRecognizer(EntityRecognizer):
         super().__init__(supported_entities=["NUMBER"])
         self.pattern = Pattern(
             name="general_number",
-            regex=r"\d+(?:[.,-/ ]\d+)*(?:[., ][a-zA-Z]{1,3})?",
-            score=0.5
+            regex=r"[+(\d][\d\.\-,/()+ ]*(?:[.,+ ][a-zA-Z]{1,3})?",
+            score=0.7
         )
 
     def load(self) -> None:
@@ -30,7 +30,7 @@ class GeneralNumberRecognizer(EntityRecognizer):
                         entity_type="NUMBER",
                         start=match.start(),
                         end=match.end(),
-                        score=0.6
+                        score=0.7
                     )
                 )
         return results

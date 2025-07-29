@@ -6,7 +6,7 @@ from presidio_analyzer import EntityRecognizer, RecognizerResult
 class HighDigitDensityRecognizer(EntityRecognizer):
     """Recognizer for substrings with high digit density."""
 
-    def __init__(self, min_digits: int = 4, window_size: int = 12, density_threshold: float = 0.4):
+    def __init__(self, min_digits: int = 2, window_size: int = 5, density_threshold: float = 0.4):
         super().__init__(supported_entities=["NUMBER"])
         self.min_digits = min_digits
         self.window_size = window_size
