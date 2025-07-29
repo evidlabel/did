@@ -54,7 +54,11 @@ def extract(file, config, language):
         click.echo(f"  PERSON found: {anonymizer.counts['person_found']}")
         click.echo(f"  EMAIL_ADDRESS found: {anonymizer.counts['email_address_found']}")
         click.echo(f"  LOCATION found: {anonymizer.counts['location_found']}")
-        click.echo(f"  NUMBER found: {anonymizer.counts['number_found']}")
+        click.echo(f"  PHONE_NUMBER found: {anonymizer.counts['phone_number_found']}")
+        click.echo(f"  DATE_NUMBER found: {anonymizer.counts['date_number_found']}")
+        click.echo(f"  ID_NUMBER found: {anonymizer.counts['id_number_found']}")
+        click.echo(f"  CODE_NUMBER found: {anonymizer.counts['code_number_found']}")
+        click.echo(f"  GENERAL_NUMBER found: {anonymizer.counts['general_number_found']}")
         click.echo(f"  CPR_NUMBER found: {anonymizer.counts['cpr_number_found']}")
 
         yaml_str = anonymizer.generate_yaml()
@@ -130,14 +134,22 @@ def pseudo(file, config, output, language, typst):
                 "person": 0,
                 "email_address": 0,
                 "location": 0,
-                "number": 0,
+                "phone_number": 0,
+                "date_number": 0,
+                "id_number": 0,
+                "code_number": 0,
+                "general_number": 0,
                 "cpr_number": 0,
             }
             category_mapping = {
                 "person": "person_replaced",
                 "email_address": "email_address_replaced",
                 "location": "location_replaced",
-                "number": "number_replaced",
+                "phone_number": "phone_number_replaced",
+                "date_number": "date_number_replaced",
+                "id_number": "id_number_replaced",
+                "code_number": "code_number_replaced",
+                "general_number": "general_number_replaced",
                 "cpr_number": "cpr_number_replaced",
             }
             typst_mappings = {}  # var -> real_value
@@ -166,12 +178,24 @@ def pseudo(file, config, output, language, typst):
                         fake += char
                 return fake
 
+            number_cats = [
+                "phone_number",
+                "date_number",
+                "id_number",
+                "code_number",
+                "general_number",
+                "cpr_number",
+            ]
             for cat in var_counters:
                 prefix = {
                     "person": "P",
                     "email_address": "E",
                     "location": "A",
-                    "number": "N",
+                    "phone_number": "PH",
+                    "date_number": "DT",
+                    "id_number": "ID",
+                    "code_number": "CD",
+                    "general_number": "GN",
                     "cpr_number": "C",
                 }[cat]
                 entities = getattr(anonymizer.entities, cat)
@@ -181,7 +205,7 @@ def pseudo(file, config, output, language, typst):
                     sorted_variants = sorted(entity.variants, key=len, reverse=True)
 
                     # Category-specific fake setup with max digit length
-                    if cat in ["number", "cpr_number"]:
+                    if cat in number_cats:
                         if entity.variants:
                             max_digit_len = max(
                                 len(re.sub(r"\D", "", v)) for v in entity.variants
@@ -203,7 +227,7 @@ def pseudo(file, config, output, language, typst):
                             fake_var = f"email{ent_idx}var{v_idx}@example.com"
                         elif cat == "location":
                             fake_var = f"Address{ent_idx} Var{v_idx}"
-                        elif cat in ["number", "cpr_number"]:
+                        elif cat in number_cats:
                             fake_var = apply_format(variant, fake_digits)
                         else:
                             fake_var = "<FAKE>"
@@ -221,7 +245,7 @@ def pseudo(file, config, output, language, typst):
                                 pattern,
                                 repl,
                                 cat,
-                                entity.pattern if cat == "number" else None,
+                                entity.pattern if cat in number_cats else None,
                             )
                         )
 
@@ -272,7 +296,11 @@ def pseudo(file, config, output, language, typst):
             click.echo(f"  PERSON replaced: {counts['person_replaced']}")
             click.echo(f"  EMAIL_ADDRESS replaced: {counts['email_address_replaced']}")
             click.echo(f"  LOCATION replaced: {counts['location_replaced']}")
-            click.echo(f"  NUMBER replaced: {counts['number_replaced']}")
+            click.echo(f"  PHONE_NUMBER replaced: {counts['phone_number_replaced']}")
+            click.echo(f"  DATE_NUMBER replaced: {counts['date_number_replaced']}")
+            click.echo(f"  ID_NUMBER replaced: {counts['id_number_replaced']}")
+            click.echo(f"  CODE_NUMBER replaced: {counts['code_number_replaced']}")
+            click.echo(f"  GENERAL_NUMBER replaced: {counts['general_number_replaced']}")
             click.echo(f"  CPR_NUMBER replaced: {counts['cpr_number_replaced']}")
 
             console = Console()
@@ -306,7 +334,11 @@ def pseudo(file, config, output, language, typst):
             click.echo(f"  PERSON replaced: {counts['person_replaced']}")
             click.echo(f"  EMAIL_ADDRESS replaced: {counts['email_address_replaced']}")
             click.echo(f"  LOCATION replaced: {counts['location_replaced']}")
-            click.echo(f"  NUMBER replaced: {counts['number_replaced']}")
+            click.echo(f"  PHONE_NUMBER replaced: {counts['phone_number_replaced']}")
+            click.echo(f"  DATE_NUMBER replaced: {counts['date_number_replaced']}")
+            click.echo(f"  ID_NUMBER replaced: {counts['id_number_replaced']}")
+            click.echo(f"  CODE_NUMBER replaced: {counts['code_number_replaced']}")
+            click.echo(f"  GENERAL_NUMBER replaced: {counts['general_number_replaced']}")
             click.echo(f"  CPR_NUMBER replaced: {counts['cpr_number_replaced']}")
 
             console = Console()

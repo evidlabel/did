@@ -25,7 +25,11 @@ def test_extract_empty_text(anonymizer):
     assert config["PERSON"] == []
     assert config["EMAIL_ADDRESS"] == []
     assert config["LOCATION"] == []
-    assert config["NUMBER"] == []
+    assert config["PHONE_NUMBER"] == []
+    assert config["DATE_NUMBER"] == []
+    assert config["ID_NUMBER"] == []
+    assert config["CODE_NUMBER"] == []
+    assert config["GENERAL_NUMBER"] == []
     assert config["CPR_NUMBER"] == []
     assert all(count == 0 for count in anonymizer.counts.values())
 
@@ -61,11 +65,11 @@ def test_anonymize_number_variants(anonymizer):
     config_str = anonymizer.generate_yaml()
     yaml_obj = yaml.YAML()
     config = yaml_obj.load(config_str)
-    assert any("1234567890" in entry["variants"] for entry in config["NUMBER"])
-    assert any("12 34 56 78" in entry["variants"] for entry in config["NUMBER"])
+    assert any("1234567890" in entry["variants"] for entry in config.get("PHONE_NUMBER", []) + config.get("GENERAL_NUMBER", []))
+    assert any("12 34 56 78" in entry["variants"] for entry in config.get("PHONE_NUMBER", []) + config.get("GENERAL_NUMBER", []))
     result, counts = anonymizer.anonymize(text)
-    assert "<NUMBER_" in result
-    assert counts["number_found"] >= 3
+    assert any(tag in result for tag in ["<PHONE_NUMBER_", "<GENERAL_NUMBER_"])
+    assert counts["phone_number_found"] + counts["general_number_found"] >= 3
 
 
 def test_anonymize_address(anonymizer):
@@ -105,12 +109,12 @@ def test_anonymize_mixed_content(anonymizer):
     anonymizer.detect_entities([text])
     anonymizer.load_replacements(anonymizer.entities.model_dump(by_alias=True, exclude_none=True))
     result, counts = anonymizer.anonymize(text)
-    assert "<NUMBER_" in result
+    assert any(tag in result for tag in ["<PHONE_NUMBER_", "<GENERAL_NUMBER_"])
     assert "<LOCATION_" in result
     assert "<CPR_NUMBER_" in result
     assert counts["person_found"] >= 4
     assert counts["person_replaced"] >= 4
-    assert counts["number_found"] >= 3
+    assert counts["phone_number_found"] + counts["general_number_found"] >= 3
     assert counts["location_found"] >= 1
     assert counts["location_replaced"] >= 1
     assert counts["cpr_number_found"] >= 1

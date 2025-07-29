@@ -4,44 +4,98 @@ import re
 import io  # Added for StringIO
 from ruamel.yaml import YAML  # Explicitly using ruamel.yaml
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString  # For quoting strings
-from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern
-from presidio_analyzer.nlp_engine import SpacyNlpEngine
+from presidio_analyzer import (
+    AnalyzerEngine,
+    PatternRecognizer,
+    Pattern,
+    RecognizerRegistry,
+)
+from presidio_analyzer.nlp_engine import NlpEngineProvider
+from presidio_analyzer.predefined_recognizers import EmailRecognizer, PhoneRecognizer
 from .models import Config, Entity
 from ..utils import find_name_variants, find_number_variants
-from .number_detector import HighDigitDensityRecognizer
-
-# from .general_number_detector import GeneralNumberRecognizer
 from collections import defaultdict
+
+
+def get_custom_digit_recognizer():
+    patterns = [
+        Pattern(name="DIGIT_SEQUENCE", regex=r"\b\d{4,6}\b", score=0.8),
+        Pattern(
+            name="general_number",
+            regex=r"[+(\d][\d\.\-,/()+ ]*(?:[.,+ ][a-zA-Z]{1,3})?",
+            score=0.7,
+        ),
+        Pattern(
+            name="date_number", regex=r"\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b", score=0.7
+        ),
+        Pattern(name="id_code", regex=r"\b\d{3,}[-\d]{3,}\s*\(\d{3,}\)\b", score=0.8),
+        Pattern(name="year_based_id", regex=r"\b\d{4}-\d{5}\b", score=0.8),
+        Pattern(name="parenthesized_code", regex=r"\(\d{6}\)", score=0.8),
+        Pattern(name="four_digit_code", regex=r"\b\d{4}\b", score=0.6),
+        Pattern(
+            name="channel_identifier",
+            regex=r"\b\d{1,2},\d{1,2}\.[a-zA-Z]{2,3}\b",
+            score=0.7,
+        ),
+        Pattern(name="dotted_triplet", regex=r"\d{2}\.\d{2}\.\d{2}", score=0.7),
+    ]
+
+    return PatternRecognizer(
+        supported_entity="DIGIT_SEQ",
+        patterns=patterns,
+        supported_language="da",
+    )
+
+
+def filter_non_overlapping(base_results, extra_results):
+    """Return extra_results that do not overlap with base_results."""
+    non_overlapping = []
+    for er in extra_results:
+        overlap = False
+        for br in base_results:
+            if not (er.end <= br.start or er.start >= br.end):
+                overlap = True
+                break
+        if not overlap:
+            non_overlapping.append(er)
+    return non_overlapping
 
 
 class Anonymizer:
     """Handles entity detection and anonymization."""
 
-    def __init__(self, language="en"):
+    def __init__(self, language="da"):
         # Configure spaCy model based on language
-        if language == "en":
-            spacy_model = "en_core_web_lg"
-        elif language == "da":
-            spacy_model = "da_core_news_md"
-        else:
-            raise ValueError(f"Unsupported language: {language}")
+        conf = {
+            "nlp_engine_name": "spacy",
+            "models": [
+                {"lang_code": "da", "model_name": f"da_core_news_md"},
+                {"lang_code": "en", "model_name": "en_core_web_md"},
+            ],
+            "ner_model_configuration": {
+                "model_to_presidio_entity_mapping": {
+                    "PER": "PERSON",
+                    "LOC": "LOCATION",
+                    "ORG": "ORGANIZATION",
+                    "MISC": "NRP",
+                },
+                "labels_to_ignore": ["O"],
+            },
+        }
 
-        nlp_engine = SpacyNlpEngine(
-            models=[{"lang_code": language, "model_name": spacy_model}]
-        )
+        nlp_engine = NlpEngineProvider(nlp_configuration=conf).create_engine()
+        registry = RecognizerRegistry(supported_languages=[language, "en"])
+        registry.load_predefined_recognizers(languages=[language, "en"])
+        registry.add_recognizer(EmailRecognizer(supported_language=language))
+        registry.add_recognizer(PhoneRecognizer(supported_language=language))
+        self.digit_recognizer = get_custom_digit_recognizer()
+        registry.add_recognizer(self.digit_recognizer)
+
         self.analyzer = AnalyzerEngine(
-            nlp_engine=nlp_engine, supported_languages=[language]
+            registry=registry,
+            nlp_engine=nlp_engine,
+            supported_languages=[language, "en"],
         )
-
-        print("Adding custom recognizers...")
-        # Add custom recognizers
-        cpr_pattern = Pattern(name="CPR_NUMBER", regex=r"\b\d{6}-\d{4}\b", score=0.95)
-        self.analyzer.registry.add_recognizer(
-            PatternRecognizer(supported_entity="CPR_NUMBER", patterns=[cpr_pattern])
-        )
-
-        self.analyzer.registry.add_recognizer(HighDigitDensityRecognizer())
-        # self.analyzer.registry.add_recognizer(GeneralNumberRecognizer())
 
         self.counts = {
             "person_found": 0,
@@ -50,8 +104,16 @@ class Anonymizer:
             "email_address_replaced": 0,
             "location_found": 0,
             "location_replaced": 0,
-            "number_found": 0,
-            "number_replaced": 0,
+            "phone_number_found": 0,
+            "phone_number_replaced": 0,
+            "date_number_found": 0,
+            "date_number_replaced": 0,
+            "id_number_found": 0,
+            "id_number_replaced": 0,
+            "code_number_found": 0,
+            "code_number_replaced": 0,
+            "general_number_found": 0,
+            "general_number_replaced": 0,
             "cpr_number_found": 0,
             "cpr_number_replaced": 0,
         }
@@ -98,28 +160,38 @@ class Anonymizer:
             "PERSON": "person",
             "EMAIL_ADDRESS": "email_address",
             "LOCATION": "location",
-            "NUMBER": "number",
-            "PHONE_NUMBER": "phone",
-            "DATE_TIME": "date_time",
-            "CPR_NUMBER": "cpr_number",
+            "PHONE_NUMBER": "phone_number",
+            "DATE_TIME": "date_number",
+            "DIGIT_SEQ": "general_number",
         }
         all_entities = defaultdict(list)
         for text in texts:
             detection_text, map_to_original = self.preprocess_text(text)
-            results = self.analyzer.analyze(
+            # 1. Run standard recognizers
+            standard_results = self.analyzer.analyze(
                 text=detection_text,
-                entities=[
-                    "PERSON",
-                    "EMAIL_ADDRESS",
-                    "LOCATION",
-                    "NUMBER",
-                    "PHONE_NUMBER",
-                    "CPR_NUMBER",
-                    "DATE_TIME",
-                ],
-                language=self.language,
+                language=self.language,  # or "en", or detect
+                entities=None,
             )
-            for result in results:
+
+            # 2. Run custom recognizer
+            digit_results = self.digit_recognizer.analyze(
+                text=detection_text,
+                entities=["DIGIT_SEQ"],
+                nlp_artifacts=None,
+            )
+
+            # 3. Filter overlapping matches
+            extra_digit_results = filter_non_overlapping(
+                standard_results, digit_results
+            )
+
+            # Combine and sort results
+            all_results = sorted(
+                standard_results + extra_digit_results, key=lambda r: r.start
+            )
+
+            for result in all_results:
                 o_start, o_end = map_to_original(result.start, result.end)
                 try:
                     entity_text = text[
@@ -138,14 +210,25 @@ class Anonymizer:
                         self.counts[f"{mapped}_found"] += 1
 
         # Process groupings
-        for cat in ["person", "email_address", "location", "number", "cpr_number"]:
+        for cat in [
+            "person",
+            "email_address",
+            "location",
+            "phone_number",
+            "date_number",
+            "id_number",
+            "code_number",
+            "general_number",
+            "cpr_number",
+        ]:
             items = all_entities.get(cat, [])
             if cat == "person":
                 grouped = find_name_variants(items)
-            elif cat == "number":
-                grouped = find_number_variants(items)
-            else:
+            elif cat == "email_address" or cat == "location":
                 grouped = [[item] for item in items if item]
+            else:
+                threshold = 95 if cat == "date_number" else 80
+                grouped = find_number_variants(items, threshold=threshold)
             count = 1
             for variants in grouped:
                 ent_type_upper = cat.upper() if cat != "cpr_number" else "CPR_NUMBER"
@@ -189,9 +272,11 @@ class Anonymizer:
             "person": "person_replaced",
             "email_address": "email_address_replaced",
             "location": "location_replaced",
-            "number": "number_replaced",
-            "date_time": "date_time_replaced",
-            "phone": "phone_replaced",
+            "phone_number": "phone_number_replaced",
+            "date_number": "date_number_replaced",
+            "id_number": "id_number_replaced",
+            "code_number": "code_number_replaced",
+            "general_number": "general_number_replaced",
             "cpr_number": "cpr_number_replaced",
         }
         for cat, replaced_key in category_mapping.items():
@@ -201,7 +286,19 @@ class Anonymizer:
                 sorted_variants = sorted(entity.variants, key=len, reverse=True)
                 for variant in sorted_variants:
                     escaped = re.escape(variant)
-                    if cat in ["person", "number", "cpr_number"] and "\n" in variant:
+                    if (
+                        cat
+                        in [
+                            "person",
+                            "phone_number",
+                            "date_number",
+                            "id_number",
+                            "code_number",
+                            "general_number",
+                            "cpr_number",
+                        ]
+                        and "\n" in variant
+                    ):
                         pattern = escaped
                     elif cat == "location":
                         pattern = escaped
@@ -212,7 +309,15 @@ class Anonymizer:
                     self.counts[replaced_key] += count
                     replacement = (
                         f'"{entity.id}"'
-                        if cat in ["number", "cpr_number"]
+                        if cat
+                        in [
+                            "phone_number",
+                            "date_number",
+                            "id_number",
+                            "code_number",
+                            "general_number",
+                            "cpr_number",
+                        ]
                         else entity.id
                     )
                     # Surround with quotes for numbers and CPR
