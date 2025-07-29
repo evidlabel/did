@@ -1,7 +1,7 @@
 """CLI interface for the DID tool."""
 
 import rich_click as click
-import yaml
+import ruamel.yaml as yaml  # Switched from PyYAML to ruamel.yaml
 from rich.console import Console
 from rich.syntax import Syntax
 from pathlib import Path
@@ -111,8 +111,9 @@ def an(file, config, output, language, typst):
     try:
         click.echo("=" * 20)
         click.echo("Loading config...")
+        yaml_obj = yaml.YAML()  # Use ruamel.yaml YAML object for loading
         with open(config, "r") as f:
-            config_data = yaml.safe_load(f) or {}
+            config_data = yaml_obj.load(f) or {}
         anonymizer.load_replacements(config_data)
 
         click.echo(f"Processing {file}...")

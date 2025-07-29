@@ -1,7 +1,9 @@
 """Anonymizer class for entity detection and anonymization."""
 
 import re
-import yaml
+import io  # Added for StringIO
+from ruamel.yaml import YAML  # Explicitly using ruamel.yaml
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString  # For quoting strings
 from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern
 from presidio_analyzer.nlp_engine import SpacyNlpEngine
 from .models import Config, Entity
@@ -107,7 +109,11 @@ class Anonymizer:
             )
             for result in results:
                 o_start, o_end = map_to_original(result.start, result.end)
-                entity_text = text[o_start:o_end]
+                try:
+                    entity_text = text[o_start:o_end]  # Added try-except for error handling
+                except IndexError:
+                    print(f"String index out of range error: o_start={o_start}, o_end={o_end}, len(text)={len(text)}")  # Log the error
+                    entity_text = ""  # Set to empty string to continue
                 if result.entity_type == "PERSON" and entity_text not in all_names:
                     all_names.append(entity_text)
                     self.counts["names_found"] += 1
@@ -156,9 +162,26 @@ class Anonymizer:
             cpr_count += 1
 
     def generate_yaml(self) -> str:
-        """Generate YAML configuration from detected entities."""
+        """Generate YAML configuration from detected entities with all strings quoted."""
         data = self.entities.model_dump(exclude_none=True)
-        return yaml.safe_dump(data, sort_keys=False)
+        
+        # Function to recursively quote all strings
+        def quote_strings(obj):
+            if isinstance(obj, dict):
+                return {k: quote_strings(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [quote_strings(item) for item in obj]
+            elif isinstance(obj, str):
+                return DoubleQuotedScalarString(obj)  # Wrap strings in double quotes
+            else:
+                return obj  # Leave other types as is
+        
+        quoted_data = quote_strings(data)  # Apply quoting to data
+        
+        yaml_instance = YAML()  # Create YAML instance
+        stream = io.StringIO()  # Use StringIO for string output
+        yaml_instance.dump(quoted_data, stream)  # Dump the quoted data
+        return stream.getvalue()  # Return the string
 
     def load_replacements(self, config: dict):
         """Load replacements from YAML config using Pydantic validation."""

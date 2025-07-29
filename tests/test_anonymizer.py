@@ -1,7 +1,7 @@
 """Tests for the Anonymizer."""
 
 import pytest
-import yaml
+import ruamel.yaml as yaml  # Import for ruamel.yaml usage
 from did.core.anonymizer import Anonymizer
 from click.testing import CliRunner
 from did.cli import main
@@ -19,7 +19,9 @@ def runner():
 
 def test_extract_empty_text(anonymizer):
     anonymizer.detect_entities([""])
-    config = yaml.safe_load(anonymizer.generate_yaml())
+    yaml_obj = yaml.YAML()  # Use ruamel.yaml YAML object
+    config_str = anonymizer.generate_yaml()
+    config = yaml_obj.load(config_str)  # Load from string
     assert config["names"] == []
     assert config["emails"] == []
     assert config["addresses"] == []
@@ -42,7 +44,9 @@ def test_anonymize_name_variants(anonymizer):
     text = "John Doe and Jon Doe and john DOE were mentioned."
     anonymizer.detect_entities([text])
     anonymizer.load_replacements(anonymizer.entities.model_dump(exclude_none=True))
-    config = yaml.safe_load(anonymizer.generate_yaml())
+    config_str = anonymizer.generate_yaml()
+    yaml_obj = yaml.YAML()
+    config = yaml_obj.load(config_str)
     assert len(config["names"]) == 1
     result, counts = anonymizer.anonymize(text)
     assert "<PERSON_1>" in result
@@ -54,7 +58,9 @@ def test_anonymize_number_variants(anonymizer):
     text = "Account: 1234567890, Phone: 1234567, Code: 12 34 56 78"
     anonymizer.detect_entities([text])
     anonymizer.load_replacements(anonymizer.entities.model_dump(exclude_none=True))
-    config = yaml.safe_load(anonymizer.generate_yaml())
+    config_str = anonymizer.generate_yaml()
+    yaml_obj = yaml.YAML()
+    config = yaml_obj.load(config_str)
     assert any("1234567890" in entry["variants"] for entry in config["numbers"])
     assert any(
         "12 34 56 78" in entry["variants"]
@@ -125,8 +131,9 @@ def test_cli_extract(runner, tmp_path):
     assert "Names found: 2" in result.output  # Grouped
     assert "CPR found: 1" in result.output
     assert config_file.exists()
+    yaml_obj = yaml.YAML()  # Use ruamel.yaml YAML object
     with open(config_file, "r") as f:
-        config = yaml.safe_load(f)
+        config = yaml_obj.load(f)  # Load using YAML object
         assert len(config["names"]) >= 1
         assert any(
             "123456-1234" in entry["variants"] for entry in config["cpr"]
