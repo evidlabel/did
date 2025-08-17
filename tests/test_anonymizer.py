@@ -37,7 +37,9 @@ def test_extract_empty_text(anonymizer):
 def test_anonymize_name_exact(anonymizer):
     text = "Hello John Doe, how are you?"
     anonymizer.detect_entities([text])
-    anonymizer.load_replacements(anonymizer.entities.model_dump(by_alias=True, exclude_none=True))
+    anonymizer.load_replacements(
+        anonymizer.entities.model_dump(by_alias=True, exclude_none=True)
+    )
     result, counts = anonymizer.anonymize(text)
     assert "<PERSON_1>" in result
     assert counts["person_found"] >= 1
@@ -47,7 +49,9 @@ def test_anonymize_name_exact(anonymizer):
 def test_anonymize_name_variants(anonymizer):
     text = "John Doe and Jon Doe and john DOE were mentioned."
     anonymizer.detect_entities([text])
-    anonymizer.load_replacements(anonymizer.entities.model_dump(by_alias=True, exclude_none=True))
+    anonymizer.load_replacements(
+        anonymizer.entities.model_dump(by_alias=True, exclude_none=True)
+    )
     config_str = anonymizer.generate_yaml()
     yaml_obj = yaml.YAML()
     config = yaml_obj.load(config_str)
@@ -61,12 +65,20 @@ def test_anonymize_name_variants(anonymizer):
 def test_anonymize_number_variants(anonymizer):
     text = "Account: 1234567890, Phone: 1234567, Code: 12 34 56 78"
     anonymizer.detect_entities([text])
-    anonymizer.load_replacements(anonymizer.entities.model_dump(by_alias=True, exclude_none=True))
+    anonymizer.load_replacements(
+        anonymizer.entities.model_dump(by_alias=True, exclude_none=True)
+    )
     config_str = anonymizer.generate_yaml()
     yaml_obj = yaml.YAML()
     config = yaml_obj.load(config_str)
-    assert any("1234567890" in entry["variants"] for entry in config.get("PHONE_NUMBER", []) + config.get("GENERAL_NUMBER", []))
-    assert any("12 34 56 78" in entry["variants"] for entry in config.get("PHONE_NUMBER", []) + config.get("GENERAL_NUMBER", []))
+    assert any(
+        "1234567890" in entry["variants"]
+        for entry in config.get("PHONE_NUMBER", []) + config.get("GENERAL_NUMBER", [])
+    )
+    assert any(
+        "12 34 56 78" in entry["variants"]
+        for entry in config.get("PHONE_NUMBER", []) + config.get("GENERAL_NUMBER", [])
+    )
     result, counts = anonymizer.anonymize(text)
     assert any(tag in result for tag in ["<PHONE_NUMBER_", "<GENERAL_NUMBER_"])
     assert counts["phone_number_found"] + counts["general_number_found"] >= 3
@@ -75,7 +87,9 @@ def test_anonymize_number_variants(anonymizer):
 def test_anonymize_address(anonymizer):
     text = "Lives at 123 Oneway St, Springfield, US"
     anonymizer.detect_entities([text])
-    anonymizer.load_replacements(anonymizer.entities.model_dump(by_alias=True, exclude_none=True))
+    anonymizer.load_replacements(
+        anonymizer.entities.model_dump(by_alias=True, exclude_none=True)
+    )
     result, counts = anonymizer.anonymize(text)
     assert "<LOCATION_1>" in result
     assert counts["location_found"] >= 1
@@ -87,7 +101,9 @@ def test_anonymize_danish_address():
     text = "Bor på Langelandsgade 14, 1.tv, 7300 Jelling"
     anonymizer.detect_entities([text])
     assert anonymizer.counts["location_found"] >= 1
-    anonymizer.load_replacements(anonymizer.entities.model_dump(by_alias=True, exclude_none=True))
+    anonymizer.load_replacements(
+        anonymizer.entities.model_dump(by_alias=True, exclude_none=True)
+    )
     result, counts = anonymizer.anonymize(text)
     assert "<LOCATION_1>" in result
     assert counts["location_found"] >= 1
@@ -97,7 +113,9 @@ def test_anonymize_danish_address():
 def test_anonymize_cpr(anonymizer):
     text = "CPR: 123456-1234"
     anonymizer.detect_entities([text])
-    anonymizer.load_replacements(anonymizer.entities.model_dump(by_alias=True, exclude_none=True))
+    anonymizer.load_replacements(
+        anonymizer.entities.model_dump(by_alias=True, exclude_none=True)
+    )
     result, counts = anonymizer.anonymize(text)
     assert "<CPR_NUMBER_1>" in result
     assert counts["cpr_number_found"] >= 1
@@ -107,7 +125,9 @@ def test_anonymize_cpr(anonymizer):
 def test_anonymize_mixed_content(anonymizer):
     text = "Contact John Doe at 1234567890 or Jane Smith via 12 34 56 78. Jon Doe and Jane Smyth share details at 123 Oneway St, Springfield, US. CPR: 123456-1234. Additional phone: 1234567"
     anonymizer.detect_entities([text])
-    anonymizer.load_replacements(anonymizer.entities.model_dump(by_alias=True, exclude_none=True))
+    anonymizer.load_replacements(
+        anonymizer.entities.model_dump(by_alias=True, exclude_none=True)
+    )
     result, counts = anonymizer.anonymize(text)
     assert any(tag in result for tag in ["<PHONE_NUMBER_", "<GENERAL_NUMBER_"])
     assert "<LOCATION_" in result
@@ -126,7 +146,7 @@ def test_cli_extract(runner, tmp_path):
     config_file = tmp_path / "config.yaml"
     input_file.write_text("Hello John Doe and Jon Doe, CPR: 123456-1234")
     result = runner.invoke(
-        main, ["extract", "--file", str(input_file), "--config", str(config_file)]
+        main, ["extract", str(input_file), "--config", str(config_file)]
     )
     assert result.exit_code == 0
     assert "PERSON found: 2" in result.output  # Grouped
@@ -147,7 +167,7 @@ def test_cli_anonymize(runner, tmp_path):
     input_file.write_text(original_text)
 
     # First extract to generate config
-    runner.invoke(main, ["extract", "--file", str(input_file), "--config", str(config_file)])
+    runner.invoke(main, ["extract", str(input_file), "--config", str(config_file)])
 
     # Modify the input file to add new content
     modified_text = (
@@ -160,7 +180,6 @@ def test_cli_anonymize(runner, tmp_path):
         main,
         [
             "pseudo",
-            "--file",
             str(input_file),
             "--config",
             str(config_file),
