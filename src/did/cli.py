@@ -23,7 +23,7 @@ def main():
 @main.command(
     help="Extract entities from input text files and generate a YAML configuration file."
 )
-@click.option("--file", "-f", multiple=True, required=True, help="Input files")
+@click.argument("files", nargs=-1)
 @click.option("--config", "-c", default="__temp.yaml", help="Output YAML config file")
 @click.option(
     "--language",
@@ -31,15 +31,17 @@ def main():
     default="en",
     help="Language for entity detection (e.g., 'en', 'da')",
 )
-def extract(file, config, language):
+def extract(files, config, language):
     """Extract entities from text files and generate YAML config."""
+    if not files:
+        raise click.UsageError("At least one input file is required.")
     anonymizer = Anonymizer(language=language)
     console = Console()
     try:
         click.echo("=" * 20)
         click.echo("Reading input text files...")
         texts = []
-        for input_file in file:
+        for input_file in files:
             file_path = Path(input_file)
             text = extract_text(file_path)
             texts.append(text)
@@ -58,7 +60,9 @@ def extract(file, config, language):
         click.echo(f"  DATE_NUMBER found: {anonymizer.counts['date_number_found']}")
         click.echo(f"  ID_NUMBER found: {anonymizer.counts['id_number_found']}")
         click.echo(f"  CODE_NUMBER found: {anonymizer.counts['code_number_found']}")
-        click.echo(f"  GENERAL_NUMBER found: {anonymizer.counts['general_number_found']}")
+        click.echo(
+            f"  GENERAL_NUMBER found: {anonymizer.counts['general_number_found']}"
+        )
         click.echo(f"  CPR_NUMBER found: {anonymizer.counts['cpr_number_found']}")
 
         yaml_str = anonymizer.generate_yaml()
@@ -87,7 +91,7 @@ def extract(file, config, language):
 @main.command(
     help="Pseudonymize input text file using a YAML configuration and save the result."
 )
-@click.option("--file", "-f", required=True, help="Input file")
+@click.argument("file")
 @click.option("--config", "-c", required=True, help="Config file")
 @click.option("--output", "-o", default=None, help="Output file path")
 @click.option(
@@ -236,15 +240,19 @@ def pseudo(file, config, output, language, typst):
                         # Prepare replacement
                         repl = f"#({var})"
                         escaped = re.escape(variant)
-                        if cat in [
-                            "person",
-                            "phone_number",
-                            "date_number",
-                            "id_number",
-                            "code_number",
-                            "general_number",
-                            "cpr_number",
-                        ] and "\n" in variant:
+                        if (
+                            cat
+                            in [
+                                "person",
+                                "phone_number",
+                                "date_number",
+                                "id_number",
+                                "code_number",
+                                "general_number",
+                                "cpr_number",
+                            ]
+                            and "\n" in variant
+                        ):
                             pattern = escaped
                         elif cat == "location":
                             pattern = escaped
@@ -311,7 +319,9 @@ def pseudo(file, config, output, language, typst):
             click.echo(f"  DATE_NUMBER replaced: {counts['date_number_replaced']}")
             click.echo(f"  ID_NUMBER replaced: {counts['id_number_replaced']}")
             click.echo(f"  CODE_NUMBER replaced: {counts['code_number_replaced']}")
-            click.echo(f"  GENERAL_NUMBER replaced: {counts['general_number_replaced']}")
+            click.echo(
+                f"  GENERAL_NUMBER replaced: {counts['general_number_replaced']}"
+            )
             click.echo(f"  CPR_NUMBER replaced: {counts['cpr_number_replaced']}")
 
             console = Console()
@@ -349,7 +359,9 @@ def pseudo(file, config, output, language, typst):
             click.echo(f"  DATE_NUMBER replaced: {counts['date_number_replaced']}")
             click.echo(f"  ID_NUMBER replaced: {counts['id_number_replaced']}")
             click.echo(f"  CODE_NUMBER replaced: {counts['code_number_replaced']}")
-            click.echo(f"  GENERAL_NUMBER replaced: {counts['general_number_replaced']}")
+            click.echo(
+                f"  GENERAL_NUMBER replaced: {counts['general_number_replaced']}"
+            )
             click.echo(f"  CPR_NUMBER replaced: {counts['cpr_number_replaced']}")
 
             console = Console()
