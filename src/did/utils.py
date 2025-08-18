@@ -19,7 +19,13 @@ def normalize_name(name: str) -> str:
 
 def normalize_number(number: str) -> str:
     """Normalize a number for comparison."""
-    return number.replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace("+", "")
+    return (
+        number.replace(" ", "")
+        .replace("-", "")
+        .replace("(", "")
+        .replace(")", "")
+        .replace("+", "")
+    )
 
 
 def is_valid_name(name: str) -> bool:
@@ -51,7 +57,7 @@ def is_possible_variant(short_name: str, full_name: str) -> bool:
             if sp == fp:
                 found = True
                 j += 1
-            elif sp.endswith('.') and len(sp) <= 4 and fp.startswith(sp[0]):
+            elif sp.endswith(".") and len(sp) <= 4 and fp.startswith(sp[0]):
                 found = True
                 j += 1
             else:

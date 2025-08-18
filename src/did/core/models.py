@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 class Entity(BaseModel):
     """Model for an individual entity with variants."""
+
     id: str
     variants: list[str]
     pattern: str | None = None  # Optional pattern for numbers
@@ -12,6 +13,7 @@ class Entity(BaseModel):
 
 class Config(BaseModel):
     """Overall configuration model for entities."""
+
     person: list[Entity] = Field(alias="PERSON", default_factory=list)
     email_address: list[Entity] = Field(alias="EMAIL_ADDRESS", default_factory=list)
     location: list[Entity] = Field(alias="LOCATION", default_factory=list)
