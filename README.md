@@ -7,8 +7,8 @@ A CLI tool to anonymize Markdown, plain text, TeX, and BibTeX files with spaCy-b
 ## Features
 - Detects names, emails, addresses, phone numbers, and CPR numbers using Presidio with spaCy
 - Groups name and number variants using rapidfuzz
-- Extracts entities to generate a YAML config (`did ex`)
-- Anonymizes text using YAML config (`did an`), preserving file formats
+- Extracts entities to generate a YAML config (`did extract`)
+- Anonymizes text using YAML config (`did pseudo`), preserving file formats
 - Supports English (`en`) and Danish (`da`)
 
 ## Installation
