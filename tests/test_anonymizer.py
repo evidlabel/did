@@ -26,7 +26,6 @@ def test_extract_empty_text(anonymizer):
     assert config["ID_NUMBER"] == []
     assert config["CODE_NUMBER"] == []
     assert config["GENERAL_NUMBER"] == []
-    assert config["CPR_NUMBER"] == []
     assert all(count == 0 for count in anonymizer.counts.values())
 
 
@@ -114,9 +113,9 @@ def test_anonymize_cpr():
         anonymizer.entities.model_dump(by_alias=True, exclude_none=True)
     )
     result, counts = anonymizer.anonymize(text)
-    assert "<CPR_NUMBER_1>" in result
-    assert counts["cpr_number_found"] >= 1
-    assert counts["cpr_number_replaced"] >= 1
+    assert "<GENERAL_NUMBER_1>" in result
+    assert counts["general_number_found"] >= 1
+    assert counts["general_number_replaced"] >= 1
 
 
 def test_anonymize_mixed_content(anonymizer):
@@ -130,11 +129,11 @@ def test_anonymize_mixed_content(anonymizer):
     assert "<LOCATION_" in result
     assert counts["person_found"] >= 4
     assert counts["person_replaced"] >= 4
-    assert counts["phone_number_found"] + counts["general_number_found"] >= 3
+    assert (
+        counts["phone_number_found"] + counts["general_number_found"] >= 4
+    )  # Including CPR as general
     assert counts["location_found"] >= 1
     assert counts["location_replaced"] >= 1
-    assert counts["cpr_number_found"] == 0  # Adjusted for 'en'
-    assert counts["cpr_number_replaced"] == 0
 
 
 def test_cli_extract(tmp_path):
@@ -165,7 +164,8 @@ def test_cli_extract(tmp_path):
         assert len(config["PERSON"]) >= 1
         assert any(
             "123456-1234" in entry["variants"]
-            for entry in config.get("CPR_NUMBER", []) + config.get("PHONE_NUMBER", [])
+            for entry in config.get("GENERAL_NUMBER", [])
+            + config.get("PHONE_NUMBER", [])
         )
 
 
