@@ -3,18 +3,14 @@
 import pytest
 import ruamel.yaml as yaml  # Import for ruamel.yaml usage
 from did.core.anonymizer import Anonymizer
-from click.testing import CliRunner
-from did.cli import main
+import sys
+import io
+from contextlib import redirect_stdout, redirect_stderr
 
 
 @pytest.fixture
 def anonymizer():
     return Anonymizer()
-
-
-@pytest.fixture
-def runner():
-    return CliRunner()
 
 
 def test_extract_empty_text(anonymizer):
@@ -141,16 +137,24 @@ def test_anonymize_mixed_content(anonymizer):
     assert counts["cpr_number_replaced"] >= 1
 
 
-def test_cli_extract(runner, tmp_path):
+def test_cli_extract(tmp_path, capsys):
     input_file = tmp_path / "input.md"
     config_file = tmp_path / "config.yaml"
     input_file.write_text("Hello John Doe and Jon Doe, CPR: 123456-1234")
-    result = runner.invoke(
-        main, ["extract", str(input_file), "--config", str(config_file)]
-    )
-    assert result.exit_code == 0
-    assert "PERSON found: 2" in result.output  # Grouped
-    assert "CPR_NUMBER found: 1" in result.output
+
+    old_argv = sys.argv
+    sys.argv = ["did", "extract", str(input_file), "--config", str(config_file)]
+
+    from did.cli import main
+
+    with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+        main()
+
+    sys.argv = old_argv
+    output = out.getvalue()
+
+    assert "PERSON found: 2" in output  # Grouped
+    assert "CPR_NUMBER found: 1" in output
     assert config_file.exists()
     yaml_obj = yaml.YAML()  # Use ruamel.yaml YAML object
     with open(config_file, "r") as f:
@@ -159,7 +163,7 @@ def test_cli_extract(runner, tmp_path):
         assert any("123456-1234" in entry["variants"] for entry in config["CPR_NUMBER"])
 
 
-def test_cli_anonymize(runner, tmp_path):
+def test_cli_anonymize(tmp_path, capsys):
     input_file = tmp_path / "input.md"
     config_file = tmp_path / "config.yaml"
     output_file = tmp_path / "output.md"
@@ -167,7 +171,13 @@ def test_cli_anonymize(runner, tmp_path):
     input_file.write_text(original_text)
 
     # First extract to generate config
-    runner.invoke(main, ["extract", str(input_file), "--config", str(config_file)])
+    old_argv = sys.argv
+    sys.argv = ["did", "extract", str(input_file), "--config", str(config_file)]
+    from did.cli import main
+
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        main()
+    sys.argv = old_argv
 
     # Modify the input file to add new content
     modified_text = (
@@ -176,20 +186,22 @@ def test_cli_anonymize(runner, tmp_path):
     )
     input_file.write_text(modified_text)
 
-    result = runner.invoke(
-        main,
-        [
-            "pseudo",
-            str(input_file),
-            "--config",
-            str(config_file),
-            "--output",
-            str(output_file),
-        ],
-    )
-    assert result.exit_code == 0
-    assert "PERSON replaced: 3" in result.output
-    assert "CPR_NUMBER replaced: 1" in result.output
+    sys.argv = [
+        "did",
+        "pseudo",
+        str(input_file),
+        "--config",
+        str(config_file),
+        "--output",
+        str(output_file),
+    ]
+    with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+        main()
+    sys.argv = old_argv
+    output = out.getvalue()
+
+    assert "PERSON replaced: 3" in output
+    assert "CPR_NUMBER replaced: 1" in output
     assert output_file.exists()
     with open(output_file, "r") as f:
         content = f.read()
