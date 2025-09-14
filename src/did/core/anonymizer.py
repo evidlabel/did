@@ -17,7 +17,7 @@ from ..utils import find_name_variants, find_number_variants
 from collections import defaultdict
 
 
-def get_custom_recognizers():
+def get_custom_recognizers(language):
     """Return a list of custom PatternRecognizers for different entity types."""
     recognizers = []
 
@@ -35,7 +35,7 @@ def get_custom_recognizers():
         PatternRecognizer(
             supported_entity="GENERAL_NUMBER",
             patterns=general_patterns,
-            supported_language="da",
+            supported_language=language,
         )
     )
 
@@ -50,7 +50,7 @@ def get_custom_recognizers():
         PatternRecognizer(
             supported_entity="DATE_NUMBER",
             patterns=date_patterns,
-            supported_language="da",
+            supported_language=language,
         )
     )
 
@@ -61,7 +61,9 @@ def get_custom_recognizers():
     ]
     recognizers.append(
         PatternRecognizer(
-            supported_entity="ID_NUMBER", patterns=id_patterns, supported_language="da"
+            supported_entity="ID_NUMBER",
+            patterns=id_patterns,
+            supported_language=language,
         )
     )
 
@@ -78,17 +80,18 @@ def get_custom_recognizers():
         PatternRecognizer(
             supported_entity="CODE_NUMBER",
             patterns=code_patterns,
-            supported_language="da",
+            supported_language=language,
         )
     )
 
     # CPR Number (Danish SSN)
-    cpr_patterns = [Pattern(name="cpr_number", regex=r"\b\d{6}-\d{4}\b", score=0.9)]
+    cpr_patterns = [Pattern(name="cpr_number", regex=r"\b\d{6}-\d{4}\b", score=0.6)]
     recognizers.append(
         PatternRecognizer(
             supported_entity="CPR_NUMBER",
             patterns=cpr_patterns,
-            supported_language="da",
+            context=["cpr", "personnummer"],
+            supported_language=language,
         )
     )
 
@@ -136,7 +139,7 @@ class Anonymizer:
         registry.load_predefined_recognizers(languages=[language, "en"])
         registry.add_recognizer(EmailRecognizer(supported_language=language))
         registry.add_recognizer(PhoneRecognizer(supported_language=language))
-        for custom_recognizer in get_custom_recognizers():
+        for custom_recognizer in get_custom_recognizers(language):
             registry.add_recognizer(custom_recognizer)
 
         self.analyzer = AnalyzerEngine(
@@ -219,49 +222,37 @@ class Anonymizer:
         all_entities = defaultdict(list)
         for text in texts:
             detection_text, map_to_original = self.preprocess_text(text)
-            # 1. Run standard recognizers
-            standard_results = self.analyzer.analyze(
+            # Run all recognizers
+            results = self.analyzer.analyze(
                 text=detection_text,
-                language=self.language,  # or "en", or detect
+                language=self.language,
                 entities=None,
             )
 
-            # 2. Run custom recognizers
-            custom_results = []
-            for recognizer in self.analyzer.registry.recognizers:
-                if (
-                    isinstance(recognizer, PatternRecognizer)
-                    and recognizer.supported_entity in type_mapping
-                ):
-                    custom_results.extend(
-                        recognizer.analyze(
-                            text=detection_text,
-                            entities=[recognizer.supported_entity],
-                            nlp_artifacts=None,
-                        )
-                    )
+            # Sort by score descending to prioritize higher confidence matches
+            sorted_results = sorted(results, key=lambda r: -r.score)
 
-            # 3. Filter overlapping matches
-            extra_custom_results = filter_non_overlapping(
-                standard_results, custom_results
-            )
+            # Select non-overlapping results, preferring higher scores
+            selected_results = []
+            for result in sorted_results:
+                overlap = False
+                for sel in selected_results:
+                    if not (result.end <= sel.start or result.start >= sel.end):
+                        overlap = True
+                        break
+                if not overlap:
+                    selected_results.append(result)
 
-            # Combine and sort results
-            all_results = sorted(
-                standard_results + extra_custom_results, key=lambda r: r.start
-            )
-
-            for result in all_results:
+            # Process selected results
+            for result in selected_results:
                 o_start, o_end = map_to_original(result.start, result.end)
                 try:
-                    entity_text = text[
-                        o_start:o_end
-                    ]  # Added try-except for error handling
+                    entity_text = text[o_start:o_end]
                 except IndexError:
                     print(
-                        f"String index out of range error: o_start={o_start}, o_end={o_end}, len(text)={len(text)}"
-                    )  # Log the error
-                    entity_text = ""  # Set to empty string to continue
+                        f"Index error: o_start={o_start}, o_end={o_end}, len(text)={len(text)}"
+                    )
+                    entity_text = ""
                 ent_type = result.entity_type
                 if ent_type in type_mapping:
                     mapped = type_mapping[ent_type]
