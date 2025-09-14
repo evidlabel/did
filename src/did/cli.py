@@ -1,114 +1,80 @@
 """CLI interface for the DID tool."""
 
-import rich_click as click
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).parent.parent.parent / "treeparse" / "src"))
+from treeparse import cli, command, argument, option
 import ruamel.yaml as yaml  # Switched from PyYAML to ruamel.yaml
 from rich.console import Console
 from rich.syntax import Syntax
-from pathlib import Path
 from .file_utils import extract_text, anonymize_file, md_to_typst
 from .core.anonymizer import Anonymizer
 import re
 import random
 
 
-@click.group(
-    context_settings={"help_option_names": ["-h", "--help"]},
-    invoke_without_command=False,
-)
-def main():
-    """DID (De-ID) Pseudonymizer - A CLI tool to anonymize text files with entity detection."""
-    pass
-
-
-@main.command(
-    help="Extract entities from input text files and generate a YAML configuration file."
-)
-@click.argument("files", nargs=-1)
-@click.option("--config", "-c", default="__temp.yaml", help="Output YAML config file")
-@click.option(
-    "--language",
-    "-l",
-    default="en",
-    help="Language for entity detection (e.g., 'en', 'da')",
-)
 def extract(files, config, language):
     """Extract entities from text files and generate YAML config."""
     if not files:
-        raise click.UsageError("At least one input file is required.")
+        print("Error: At least one input file is required.")
+        sys.exit(1)
     anonymizer = Anonymizer(language=language)
     console = Console()
     try:
-        click.echo("=" * 20)
-        click.echo("Reading input text files...")
+        print("=" * 20)
+        print("Reading input text files...")
         texts = []
         for input_file in files:
             file_path = Path(input_file)
             text = extract_text(file_path)
             texts.append(text)
 
-        click.echo("Detecting entities...")
+        print("Detecting entities...")
         with console.status(
             f"[bold green]Detecting entities in {language}...[/bold green]"
         ):
             anonymizer.detect_entities(texts)
 
-        click.echo("Detected entities:")
-        click.echo(f"  PERSON found: {anonymizer.counts['person_found']}")
-        click.echo(f"  EMAIL_ADDRESS found: {anonymizer.counts['email_address_found']}")
-        click.echo(f"  LOCATION found: {anonymizer.counts['location_found']}")
-        click.echo(f"  PHONE_NUMBER found: {anonymizer.counts['phone_number_found']}")
-        click.echo(f"  DATE_NUMBER found: {anonymizer.counts['date_number_found']}")
-        click.echo(f"  ID_NUMBER found: {anonymizer.counts['id_number_found']}")
-        click.echo(f"  CODE_NUMBER found: {anonymizer.counts['code_number_found']}")
-        click.echo(
-            f"  GENERAL_NUMBER found: {anonymizer.counts['general_number_found']}"
-        )
-        click.echo(f"  CPR_NUMBER found: {anonymizer.counts['cpr_number_found']}")
+        print("Detected entities:")
+        print(f"  PERSON found: {anonymizer.counts['person_found']}")
+        print(f"  EMAIL_ADDRESS found: {anonymizer.counts['email_address_found']}")
+        print(f"  LOCATION found: {anonymizer.counts['location_found']}")
+        print(f"  PHONE_NUMBER found: {anonymizer.counts['phone_number_found']}")
+        print(f"  DATE_NUMBER found: {anonymizer.counts['date_number_found']}")
+        print(f"  ID_NUMBER found: {anonymizer.counts['id_number_found']}")
+        print(f"  CODE_NUMBER found: {anonymizer.counts['code_number_found']}")
+        print(f"  GENERAL_NUMBER found: {anonymizer.counts['general_number_found']}")
+        print(f"  CPR_NUMBER found: {anonymizer.counts['cpr_number_found']}")
 
         yaml_str = anonymizer.generate_yaml()
-        click.echo("Writing YAML config...")
+        print("Writing YAML config...")
         with open(config, "w") as f:
             f.write(yaml_str)
 
-        click.echo(f"Config written to {config}")
+        print(f"Config written to {config}")
 
         syntax = Syntax(yaml_str, "yaml")
         console.print(syntax)
 
-        click.echo("=" * 20)
+        print("=" * 20)
 
     except FileNotFoundError as e:
-        click.echo(f"Error: File not found - {e}")
-        raise click.Abort()
+        print(f"Error: File not found - {e}")
+        sys.exit(1)
     except yaml.YAMLError as e:
-        click.echo(f"Error in YAML configuration: {e}")
-        raise click.Abort()
+        print(f"Error in YAML configuration: {e}")
+        sys.exit(1)
     except Exception as e:
-        click.echo(f"Error: {e}")
-        raise click.Abort()
+        print(f"Error: {e}")
+        sys.exit(1)
 
 
-@main.command(
-    help="Pseudonymize input text file using a YAML configuration and save the result."
-)
-@click.argument("file")
-@click.option("--config", "-c", required=True, help="Config file")
-@click.option("--output", "-o", default=None, help="Output file path")
-@click.option(
-    "--language",
-    "-l",
-    default="en",
-    help="Language for entity detection (e.g., 'en', 'da')",
-)
-@click.option(
-    "--typst",
-    "-t",
-    type=str,
-    default=None,
-    help="Directory to export Typst files (main.typ and vars.typ) with real entity values.",
-)
 def pseudo(file, config, output, language, typst):
     """Pseudonymize text files using YAML config."""
+    if config is None:
+        print("Error: --config is required")
+        sys.exit(1)
     anonymizer = Anonymizer(language=language)
     input_path = Path(file)
     if output is None and not typst:
@@ -117,21 +83,19 @@ def pseudo(file, config, output, language, typst):
         )
     output_path = Path(output) if output else None
     try:
-        click.echo("=" * 20)
-        click.echo("Loading config...")
+        print("=" * 20)
+        print("Loading config...")
         yaml_obj = yaml.YAML()  # Use ruamel.yaml YAML object for loading
         with open(config, "r") as f:
             config_data = yaml_obj.load(f) or {}
         anonymizer.load_replacements(config_data)
 
-        click.echo(f"Processing {file}...")
+        print(f"Processing {file}...")
 
         if typst:
             if input_path.suffix not in [".md", ".txt"]:
-                click.echo(
-                    "Typst export currently supported only for .md and .txt files."
-                )
-                raise click.Abort()
+                print("Typst export currently supported only for .md and .txt files.")
+                sys.exit(1)
 
             # Generate Typst mappings and real values per variant
             var_counters = {
@@ -311,38 +275,36 @@ def pseudo(file, config, output, language, typst):
                 else:
                     f.write(anonymized_text)
 
-            click.echo("Replacement counts:")
-            click.echo(f"  PERSON replaced: {counts['person_replaced']}")
-            click.echo(f"  EMAIL_ADDRESS replaced: {counts['email_address_replaced']}")
-            click.echo(f"  LOCATION replaced: {counts['location_replaced']}")
-            click.echo(f"  PHONE_NUMBER replaced: {counts['phone_number_replaced']}")
-            click.echo(f"  DATE_NUMBER replaced: {counts['date_number_replaced']}")
-            click.echo(f"  ID_NUMBER replaced: {counts['id_number_replaced']}")
-            click.echo(f"  CODE_NUMBER replaced: {counts['code_number_replaced']}")
-            click.echo(
-                f"  GENERAL_NUMBER replaced: {counts['general_number_replaced']}"
-            )
-            click.echo(f"  CPR_NUMBER replaced: {counts['cpr_number_replaced']}")
+            print("Replacement counts:")
+            print(f"  PERSON replaced: {counts['person_replaced']}")
+            print(f"  EMAIL_ADDRESS replaced: {counts['email_address_replaced']}")
+            print(f"  LOCATION replaced: {counts['location_replaced']}")
+            print(f"  PHONE_NUMBER replaced: {counts['phone_number_replaced']}")
+            print(f"  DATE_NUMBER replaced: {counts['date_number_replaced']}")
+            print(f"  ID_NUMBER replaced: {counts['id_number_replaced']}")
+            print(f"  CODE_NUMBER replaced: {counts['code_number_replaced']}")
+            print(f"  GENERAL_NUMBER replaced: {counts['general_number_replaced']}")
+            print(f"  CPR_NUMBER replaced: {counts['cpr_number_replaced']}")
 
             console = Console()
-            click.echo(f"\nTypst files written to {main_path.parent}")
-            click.echo(f" - {main_path}")
-            click.echo(f" - {vars_path}")
-            click.echo(f" - {fake_path}")
+            print(f"\nTypst files written to {main_path.parent}")
+            print(f" - {main_path}")
+            print(f" - {vars_path}")
+            print(f" - {fake_path}")
 
-            click.echo("\nPreview of vars.typ:")
+            print("\nPreview of vars.typ:")
             with open(vars_path, "r", encoding="utf-8") as f:
                 vars_content = f.read()
             syntax = Syntax(vars_content, "rust")
             console.print(syntax)
 
-            click.echo("\nPreview of fakevars.typ:")
+            print("\nPreview of fakevars.typ:")
             with open(fake_path, "r", encoding="utf-8") as f:
                 fake_content = f.read()
             syntax = Syntax(fake_content, "rust")
             console.print(syntax)
 
-            click.echo("\nPreview of main.typ:")
+            print("\nPreview of main.typ:")
             with open(main_path, "r", encoding="utf-8") as f:
                 main_content = f.read()
             syntax = Syntax(main_content, "rust")
@@ -351,18 +313,16 @@ def pseudo(file, config, output, language, typst):
         else:
             counts = anonymize_file(input_path, anonymizer, output_path)
 
-            click.echo("Replacement counts:")
-            click.echo(f"  PERSON replaced: {counts['person_replaced']}")
-            click.echo(f"  EMAIL_ADDRESS replaced: {counts['email_address_replaced']}")
-            click.echo(f"  LOCATION replaced: {counts['location_replaced']}")
-            click.echo(f"  PHONE_NUMBER replaced: {counts['phone_number_replaced']}")
-            click.echo(f"  DATE_NUMBER replaced: {counts['date_number_replaced']}")
-            click.echo(f"  ID_NUMBER replaced: {counts['id_number_replaced']}")
-            click.echo(f"  CODE_NUMBER replaced: {counts['code_number_replaced']}")
-            click.echo(
-                f"  GENERAL_NUMBER replaced: {counts['general_number_replaced']}"
-            )
-            click.echo(f"  CPR_NUMBER replaced: {counts['cpr_number_replaced']}")
+            print("Replacement counts:")
+            print(f"  PERSON replaced: {counts['person_replaced']}")
+            print(f"  EMAIL_ADDRESS replaced: {counts['email_address_replaced']}")
+            print(f"  LOCATION replaced: {counts['location_replaced']}")
+            print(f"  PHONE_NUMBER replaced: {counts['phone_number_replaced']}")
+            print(f"  DATE_NUMBER replaced: {counts['date_number_replaced']}")
+            print(f"  ID_NUMBER replaced: {counts['id_number_replaced']}")
+            print(f"  CODE_NUMBER replaced: {counts['code_number_replaced']}")
+            print(f"  GENERAL_NUMBER replaced: {counts['general_number_replaced']}")
+            print(f"  CPR_NUMBER replaced: {counts['cpr_number_replaced']}")
 
             console = Console()
             with open(output_path, "r", encoding="utf-8") as f:
@@ -373,17 +333,97 @@ def pseudo(file, config, output, language, typst):
                     syntax = Syntax(content, "text", theme="monokai")
                 console.print(syntax)
 
-        click.echo("=" * 20)
+        print("=" * 20)
 
     except FileNotFoundError as e:
-        click.echo(f"Error: File not found - {e}")
-        raise click.Abort()
+        print(f"Error: File not found - {e}")
+        sys.exit(1)
     except yaml.YAMLError as e:
-        click.echo(f"Error in YAML configuration: {e}")
-        raise click.Abort()
+        print(f"Error in YAML configuration: {e}")
+        sys.exit(1)
     except Exception as e:
-        click.echo(f"Error: {e}")
-        raise click.Abort()
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
+app = cli(
+    name="did",
+    help="DID (De-ID) Pseudonymizer - A CLI tool to anonymize text files with entity detection.",
+    max_width=120,
+    show_types=True,
+    show_defaults=True,
+    line_connect=True,
+    theme="monochrome",
+)
+
+extract_cmd = command(
+    name="extract",
+    help="Extract entities from input text files and generate a YAML configuration file.",
+    callback=extract,
+    arguments=[
+        argument(name="files", arg_type=str, nargs=-1, sort_key=0),
+    ],
+    options=[
+        option(
+            flags=["--config", "-c"],
+            arg_type=str,
+            default="__temp.yaml",
+            help="Output YAML config file",
+            sort_key=0,
+        ),
+        option(
+            flags=["--language", "-l"],
+            arg_type=str,
+            default="en",
+            help="Language for entity detection (e.g., 'en', 'da')",
+            sort_key=1,
+        ),
+    ],
+)
+app.commands.append(extract_cmd)
+
+pseudo_cmd = command(
+    name="pseudo",
+    help="Pseudonymize input text file using a YAML configuration and save the result.",
+    callback=pseudo,
+    arguments=[
+        argument(name="file", arg_type=str, sort_key=0),
+    ],
+    options=[
+        option(
+            flags=["--config", "-c"],
+            arg_type=str,
+            help="Config file",
+            sort_key=0,
+        ),
+        option(
+            flags=["--output", "-o"],
+            arg_type=str,
+            default=None,
+            help="Output file path",
+            sort_key=1,
+        ),
+        option(
+            flags=["--language", "-l"],
+            arg_type=str,
+            default="en",
+            help="Language for entity detection (e.g., 'en', 'da')",
+            sort_key=2,
+        ),
+        option(
+            flags=["--typst", "-t"],
+            arg_type=str,
+            default=None,
+            help="Directory to export Typst files (main.typ and vars.typ) with real entity values.",
+            sort_key=3,
+        ),
+    ],
+)
+app.commands.append(pseudo_cmd)
+
+
+def main():
+    app.run()
 
 
 if __name__ == "__main__":
