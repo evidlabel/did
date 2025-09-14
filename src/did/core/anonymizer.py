@@ -36,17 +36,7 @@ def get_custom_recognizers(language):
         PatternRecognizer(
             supported_entity="GENERAL_NUMBER",
             patterns=general_patterns,
-            context=[
-                "account",
-                "phone",
-                "code",
-                "number",
-                "id",
-                "tel",
-                "mobil",
-                "cpr",
-                "personnummer",
-            ],
+            context=["account", "phone", "code", "number", "id", "tel", "mobil", "cpr", "personnummer"],
             supported_language=language,
         )
     )
@@ -73,9 +63,7 @@ def get_custom_recognizers(language):
     ]
     recognizers.append(
         PatternRecognizer(
-            supported_entity="ID_NUMBER",
-            patterns=id_patterns,
-            supported_language=language,
+            supported_entity="ID_NUMBER", patterns=id_patterns, supported_language=language
         )
     )
 
@@ -90,9 +78,7 @@ def get_custom_recognizers(language):
     ]
     recognizers.append(
         PatternRecognizer(
-            supported_entity="CODE_NUMBER",
-            patterns=code_patterns,
-            supported_language=language,
+            supported_entity="CODE_NUMBER", patterns=code_patterns, supported_language=language
         )
     )
 
@@ -250,9 +236,7 @@ class Anonymizer:
                 try:
                     entity_text = text[o_start:o_end].strip()
                 except IndexError:
-                    print(
-                        f"Index error: o_start={o_start}, o_end={o_end}, len(text)={len(text)}"
-                    )
+                    print(f"Index error: o_start={o_start}, o_end={o_end}, len(text)={len(text)}")
                     entity_text = ""
                 ent_type = result.entity_type
                 if ent_type in type_mapping:
@@ -336,34 +320,18 @@ class Anonymizer:
             for entity in entities:
                 for variant in entity.variants:
                     escaped = re.escape(variant)
-                    if cat in [
-                        "phone_number",
-                        "date_number",
-                        "id_number",
-                        "code_number",
-                        "general_number",
-                    ] or (cat == "person" and "\n" in variant):
+                    if cat in ["phone_number", "date_number", "id_number", "code_number", "general_number"] or (cat == "person" and "\n" in variant):
                         pattern = escaped
                     elif cat == "location":
                         pattern = escaped
                     else:
                         pattern = r"\b" + escaped + r"\b"
-                    all_replacements.append(
-                        (variant, pattern, entity.id, found_key, replaced_key)
-                    )
+                    all_replacements.append((variant, pattern, entity.id, found_key, replaced_key))
 
         # Sort by variant length descending
-        sorted_replacements = sorted(
-            all_replacements, key=lambda x: len(x[0]), reverse=True
-        )
+        sorted_replacements = sorted(all_replacements, key=lambda x: len(x[0]), reverse=True)
 
-        for (
-            variant,
-            pattern,
-            replacement,
-            found_key,
-            replaced_key,
-        ) in sorted_replacements:
+        for variant, pattern, replacement, found_key, replaced_key in sorted_replacements:
             matches = re.findall(pattern, text)
             count = len(matches)
             self.counts[found_key] += count

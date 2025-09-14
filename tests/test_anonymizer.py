@@ -163,7 +163,10 @@ def test_cli_extract(tmp_path):
     with open(config_file, "r") as f:
         config = yaml_obj.load(f)  # Load using YAML object
         assert len(config["PERSON"]) >= 1
-        assert any("123456-1234" in entry["variants"] for entry in config.get("CPR_NUMBER", []) + config.get("PHONE_NUMBER", []))
+        assert any(
+            "123456-1234" in entry["variants"]
+            for entry in config.get("CPR_NUMBER", []) + config.get("PHONE_NUMBER", [])
+        )
 
 
 def test_cli_anonymize(tmp_path):
@@ -177,6 +180,7 @@ def test_cli_anonymize(tmp_path):
     old_argv = sys.argv
     sys.argv = ["did", "extract", str(input_file), "--config", str(config_file)]
     from did.cli import main
+
     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
         try:
             main()
