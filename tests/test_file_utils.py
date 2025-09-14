@@ -16,7 +16,9 @@ def temp_files(tmp_path):
         "\\documentclass{article} \\begin{document} Hello \\end{document}"
     )
     bib_file = tmp_path / "test.bib"
-    bib_file.write_text("@article{test, title={Test Title}, author={John Doe}}")
+    bib_file.write_text(
+        "@article{test, title={Test Title by John Doe}, author={John Doe}}"
+    )
     return md_file, txt_file, tex_file, bib_file
 
 
@@ -43,7 +45,7 @@ def test_extract_text_tex(temp_files):
 def test_extract_text_bib(temp_files):
     _, _, _, bib_file = temp_files
     text = extract_text(bib_file)
-    assert "Test Title" in text
+    assert "Test Title by John Doe" in text
     assert "John Doe" in text
 
 
@@ -97,7 +99,7 @@ def test_anonymize_file_bib(temp_files):
     with open(output, "r") as f:
         bib_content = f.read()
         assert "<PERSON_1>" in bib_content
-    assert counts["person_replaced"] == 1
+    assert counts["person_replaced"] == 2
 
 
 def test_anonymize_file_unsupported(tmp_path):
