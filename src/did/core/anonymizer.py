@@ -85,16 +85,17 @@ def get_custom_recognizers(language):
         )
     )
 
-    # CPR Number (Danish SSN)
-    cpr_patterns = [Pattern(name="cpr_number", regex=r"\b\d{6}-\d{4}\b", score=0.6)]
-    recognizers.append(
-        PatternRecognizer(
-            supported_entity="CPR_NUMBER",
-            patterns=cpr_patterns,
-            context=["cpr", "personnummer"],
-            supported_language=language,
+    # CPR Number (Danish SSN) - only for 'da'
+    if language == "da":
+        cpr_patterns = [Pattern(name="cpr_number", regex=r"\b\d{6}-\d{4}\b", score=0.6)]
+        recognizers.append(
+            PatternRecognizer(
+                supported_entity="CPR_NUMBER",
+                patterns=cpr_patterns,
+                context=["cpr", "personnummer"],
+                supported_language=language,
+            )
         )
-    )
 
     return recognizers
 
