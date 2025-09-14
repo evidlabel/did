@@ -25,7 +25,7 @@ def get_custom_recognizers(language):
     general_patterns = [
         Pattern(
             name="general_number",
-            regex=r"[+(\d][\d\.\-,/()+ ]*(?:[.,+ ][a-zA-Z]{1,3})?",
+            regex=r"[+(\d][\d\.\-,/()+ ]*\d(?:[.,+ ]?[a-zA-Z]{1,3})?",
             score=0.7,
         ),
         Pattern(name="DIGIT_SEQUENCE", regex=r"\b\d{4,6}\b", score=0.8),
