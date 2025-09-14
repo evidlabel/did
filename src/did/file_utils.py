@@ -67,11 +67,11 @@ def md_to_typst(md: str) -> str:
     md = re.sub(r"^##\s+(.*)$", r"== \1", md, flags=re.M)
     md = re.sub(r"^###\s+(.*)$", r"=== \1", md, flags=re.M)
     md = re.sub(r"^####\s+(.*)$", r"==== \1", md, flags=re.M)
-    # Bold and italic
-    md = re.sub(r"\*\*(.*?)\*\*", r"*\1*", md)
-    md = re.sub(r"__(.*?)__", r"*\1*", md)
+    # Italic and bold (process italic first to avoid conflict)
     md = re.sub(r"\*(.*?)\*", r"_\1_", md)
     md = re.sub(r"_(.*?)_", r"_\1_", md)
+    md = re.sub(r"\*\*(.*?)\*\*", r"*\1*", md)
+    md = re.sub(r"__(.*?)__", r"*\1*", md)
     # Code
     md = re.sub(r"`(.*?)`", r"`\1`", md)
     # Links
