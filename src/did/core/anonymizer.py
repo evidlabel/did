@@ -127,6 +127,7 @@ class Anonymizer:
                 "model_to_presidio_entity_mapping": {
                     "PER": "PERSON",
                     "LOC": "LOCATION",
+                    "GPE": "LOCATION",
                     "ORG": "ORGANIZATION",
                     "MISC": "NRP",
                 },
@@ -232,9 +233,11 @@ class Anonymizer:
             # Sort by score descending to prioritize higher confidence matches
             sorted_results = sorted(results, key=lambda r: -r.score)
 
-            # Select non-overlapping results, preferring higher scores
+            # Select non-overlapping results, preferring higher scores, but skip unmapped to not block mapped ones
             selected_results = []
             for result in sorted_results:
+                if result.entity_type not in type_mapping:
+                    continue  # Skip unmapped entities to avoid blocking
                 overlap = False
                 for sel in selected_results:
                     if not (result.end <= sel.start or result.start >= sel.end):
