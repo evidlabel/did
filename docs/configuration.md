@@ -1,6 +1,7 @@
 # Configuration
 
 Generated `config.yaml` example:
+
 ```yaml
 names:
   - id: <PERSON_1>

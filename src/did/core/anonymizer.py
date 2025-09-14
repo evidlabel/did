@@ -1,201 +1,373 @@
 """Anonymizer class for entity detection and anonymization."""
 
 import re
-import yaml
-from presidio_analyzer import AnalyzerEngine, PatternRecognizer, Pattern
-from presidio_anonymizer import AnonymizerEngine, OperatorConfig
-from ..operators import InstanceCounterAnonymizer
-from ..utils import find_name_variants, find_number_variants
+import io  # Added for StringIO
+from ruamel.yaml import YAML  # Explicitly using ruamel.yaml
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString  # For quoting strings
+from presidio_analyzer import (
+    AnalyzerEngine,
+    PatternRecognizer,
+    Pattern,
+    RecognizerRegistry,
+)
+from presidio_analyzer.nlp_engine import NlpEngineProvider
+from presidio_analyzer.predefined_recognizers import EmailRecognizer, PhoneRecognizer
 from .models import Config, Entity
+from ..utils import find_name_variants, find_number_variants
+from collections import defaultdict
+
+
+def get_custom_recognizers(language):
+    """Return a list of custom PatternRecognizers for different entity types."""
+    recognizers = []
+
+    # General Number
+    general_patterns = [
+        Pattern(
+            name="general_number",
+            regex=r"[+(\d][\d\.\-,/()+ ]*\d(?:[.,+][a-zA-Z]{1,3})?",
+            score=0.7,
+        ),
+        Pattern(name="DIGIT_SEQUENCE", regex=r"\b\d{4,6}\b", score=0.8),
+        Pattern(name="four_digit_code", regex=r"\b\d{4}\b", score=0.6),
+        Pattern(name="cpr_number", regex=r"\b\d{6}-\d{4}\b", score=0.6),
+    ]
+    recognizers.append(
+        PatternRecognizer(
+            supported_entity="GENERAL_NUMBER",
+            patterns=general_patterns,
+            context=[
+                "account",
+                "phone",
+                "code",
+                "number",
+                "id",
+                "tel",
+                "mobil",
+                "cpr",
+                "personnummer",
+            ],
+            supported_language=language,
+        )
+    )
+
+    # Date Number
+    date_patterns = [
+        Pattern(
+            name="date_number", regex=r"\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b", score=0.7
+        ),
+        Pattern(name="dotted_triplet", regex=r"\d{2}\.\d{2}\.\d{2}", score=0.7),
+    ]
+    recognizers.append(
+        PatternRecognizer(
+            supported_entity="DATE_NUMBER",
+            patterns=date_patterns,
+            supported_language=language,
+        )
+    )
+
+    # ID Number
+    id_patterns = [
+        Pattern(name="id_code", regex=r"\b\d{3,}[-\d]{3,}\s*\(\d{3,}\)\b", score=0.8),
+        Pattern(name="year_based_id", regex=r"\b\d{4}-\d{5}\b", score=0.8),
+    ]
+    recognizers.append(
+        PatternRecognizer(
+            supported_entity="ID_NUMBER",
+            patterns=id_patterns,
+            supported_language=language,
+        )
+    )
+
+    # Code Number
+    code_patterns = [
+        Pattern(name="parenthesized_code", regex=r"\(\d{6}\)", score=0.8),
+        Pattern(
+            name="channel_identifier",
+            regex=r"\b\d{1,2},\d{1,2}\.[a-zA-Z]{2,3}\b",
+            score=0.7,
+        ),
+    ]
+    recognizers.append(
+        PatternRecognizer(
+            supported_entity="CODE_NUMBER",
+            patterns=code_patterns,
+            supported_language=language,
+        )
+    )
+
+    return recognizers
+
+
+def filter_non_overlapping(base_results, extra_results):
+    """Return extra_results that do not overlap with base_results."""
+    non_overlapping = []
+    for er in extra_results:
+        overlap = False
+        for br in base_results:
+            if not (er.end <= br.start or er.start >= br.end):
+                overlap = True
+                break
+        if not overlap:
+            non_overlapping.append(er)
+    return non_overlapping
 
 
 class Anonymizer:
     """Handles entity detection and anonymization."""
 
     def __init__(self, language="en"):
-        self.analyzer = AnalyzerEngine(supported_languages=[language])
-        self.anonymizer_engine = AnonymizerEngine()
-        self.anonymizer_engine.add_anonymizer(InstanceCounterAnonymizer)
-        self.entity_mapping = {}
+        # Configure spaCy model based on language
+        conf = {
+            "nlp_engine_name": "spacy",
+            "models": [
+                {"lang_code": "da", "model_name": "da_core_news_md"},
+                {"lang_code": "en", "model_name": "en_core_web_md"},
+            ],
+            "ner_model_configuration": {
+                "model_to_presidio_entity_mapping": {
+                    "PER": "PERSON",
+                    "LOC": "LOCATION",
+                    "GPE": "LOCATION",
+                    "ORG": "ORGANIZATION",
+                    "MISC": "NRP",
+                },
+                "labels_to_ignore": ["O"],
+            },
+        }
+
+        nlp_engine = NlpEngineProvider(nlp_configuration=conf).create_engine()
+        registry = RecognizerRegistry(supported_languages=[language, "en"])
+        registry.load_predefined_recognizers(languages=[language, "en"])
+        registry.add_recognizer(EmailRecognizer(supported_language=language))
+        registry.add_recognizer(PhoneRecognizer(supported_language=language))
+        for custom_recognizer in get_custom_recognizers(language):
+            registry.add_recognizer(custom_recognizer)
+
+        self.analyzer = AnalyzerEngine(
+            registry=registry,
+            nlp_engine=nlp_engine,
+            supported_languages=[language, "en"],
+        )
+
         self.counts = {
-            "names_found": 0,
-            "names_replaced": 0,
-            "emails_found": 0,
-            "emails_replaced": 0,
-            "addresses_found": 0,
-            "addresses_replaced": 0,
-            "numbers_found": 0,
-            "numbers_replaced": 0,
-            "patterns_found": 0,
-            "patterns_replaced": 0,
-            "cpr_found": 0,
-            "cpr_replaced": 0,
+            "person_found": 0,
+            "person_replaced": 0,
+            "email_address_found": 0,
+            "email_address_replaced": 0,
+            "location_found": 0,
+            "location_replaced": 0,
+            "phone_number_found": 0,
+            "phone_number_replaced": 0,
+            "date_number_found": 0,
+            "date_number_replaced": 0,
+            "id_number_found": 0,
+            "id_number_replaced": 0,
+            "code_number_found": 0,
+            "code_number_replaced": 0,
+            "general_number_found": 0,
+            "general_number_replaced": 0,
         }
         self.entities: Config = Config()
         self.language = language
-        address_pattern = Pattern(
-            name="US_ADDRESS",
-            regex=r"\d{1,5}\s[A-Za-z]+(?:\s[A-Za-z]+)*,\s*[A-Za-z]+,\s*[A-Z]{2}\b",
-            score=0.85,
-        )
-        number_pattern = Pattern(
-            name="NUMBER_PATTERN", regex=r"\b\d{2}\s+\d{2}\s+\d{2}\s+\d{2}\b", score=0.8
-        )
-        cpr_pattern = Pattern(name="CPR_NUMBER", regex=r"\b\d{6}-\d{4}\b", score=0.95)
-        short_number_pattern = Pattern(
-            name="SHORT_NUMBER", regex=r"\b\d{7,10}\b", score=0.5
-        )
-        self.analyzer.registry.add_recognizer(
-            PatternRecognizer(supported_entity="ADDRESS", patterns=[address_pattern])
-        )
-        self.analyzer.registry.add_recognizer(
-            PatternRecognizer(supported_entity="NUMBER_PATTERN", patterns=[number_pattern])
-        )
-        self.analyzer.registry.add_recognizer(
-            PatternRecognizer(supported_entity="CPR_NUMBER", patterns=[cpr_pattern])
-        )
-        self.analyzer.registry.add_recognizer(
-            PatternRecognizer(supported_entity="PHONE_NUMBER", patterns=[short_number_pattern])
-        )
+
+    def preprocess_text(self, text: str):
+        """Preprocess text to join hyphenated multi-line words for detection."""
+        positions = []
+        detection_text = ""
+        i = 0
+        while i < len(text):
+            if (
+                i > 0
+                and (text[i - 1].isalpha() or text[i - 1].isdigit())
+                and text[i] == "-"
+                and i + 1 < len(text)
+                and text[i + 1] == "\n"
+                and i + 2 < len(text)
+                and (text[i + 2].isalpha() or text[i + 2].isdigit())
+            ):
+                i += 2  # Skip -\n
+                continue
+            detection_text += text[i]
+            positions.append(i)
+            i += 1
+
+        def map_to_original(d_start: int, d_end: int):
+            if d_start >= len(positions):
+                return len(text), len(text)
+            o_start = positions[d_start]
+            o_end = (
+                positions[d_end - 1] + 1
+                if d_end > 0 and d_end <= len(positions)
+                else len(text)
+            )
+            return o_start, o_end
+
+        return detection_text, map_to_original
 
     def detect_entities(self, texts: list):
         """Detect entities in multiple texts using Presidio."""
-        name_count = 1
-        email_count = 1
-        address_count = 1
-        number_count = 1
-        cpr_count = 1
-        all_names = []
-        all_emails = []
-        all_addresses = []
-        all_numbers = []
-        pattern_matches = []
-        all_cpr = []
+        type_mapping = {
+            "PERSON": "person",
+            "EMAIL_ADDRESS": "email_address",
+            "LOCATION": "location",
+            "PHONE_NUMBER": "phone_number",
+            "DATE_TIME": "date_number",
+            "GENERAL_NUMBER": "general_number",
+            "DATE_NUMBER": "date_number",
+            "ID_NUMBER": "id_number",
+            "CODE_NUMBER": "code_number",
+        }
+        all_entities = defaultdict(list)
         for text in texts:
+            detection_text, map_to_original = self.preprocess_text(text)
+            # Run all recognizers
             results = self.analyzer.analyze(
-                text=text,
-                entities=[
-                    "PERSON",
-                    "EMAIL_ADDRESS",
-                    "ADDRESS",
-                    "PHONE_NUMBER",
-                    "NUMBER_PATTERN",
-                    "CPR_NUMBER",
-                ],
+                text=detection_text,
                 language=self.language,
+                entities=None,
             )
-            for result in results:
-                entity_text = text[result.start : result.end]
-                if result.entity_type == "PERSON" and entity_text not in all_names:
-                    all_names.append(entity_text)
-                    self.counts["names_found"] += 1
-                elif result.entity_type == "EMAIL_ADDRESS" and entity_text not in all_emails:
-                    all_emails.append(entity_text)
-                    self.counts["emails_found"] += 1
-                elif result.entity_type == "ADDRESS" and entity_text not in all_addresses:
-                    all_addresses.append(entity_text)
-                    self.counts["addresses_found"] += 1
-                elif (
-                    result.entity_type in ["PHONE_NUMBER", "NUMBER_PATTERN"]
-                    and entity_text not in all_numbers
-                ):
-                    all_numbers.append(entity_text)
-                    self.counts["numbers_found"] += 1
-                    if result.entity_type == "NUMBER_PATTERN":
-                        pattern_matches.append(entity_text)
-                        self.counts["patterns_found"] += 1
-                elif result.entity_type == "CPR_NUMBER" and entity_text not in all_cpr:
-                    all_cpr.append(entity_text)
-                    self.counts["cpr_found"] += 1
-        grouped_names = find_name_variants(all_names)
-        for variants in grouped_names:
-            self.entities.names.append(
-                Entity(id=f"<PERSON_{name_count}>", variants=variants)
-            )
-            name_count += 1
-        for email in all_emails:
-            self.entities.emails.append(
-                Entity(id=f"<EMAIL_ADDRESS_{email_count}>", variants=[email])
-            )
-            email_count += 1
-        for address in all_addresses:
-            self.entities.addresses.append(
-                Entity(id=f"<ADDRESS_{address_count}>", variants=[address])
-            )
-            address_count += 1
-        grouped_numbers = find_number_variants(all_numbers)
-        for variants in grouped_numbers:
-            entry_dict = {"id": f"<PHONE_NUMBER_{number_count}>", "variants": variants}
-            if any(v in pattern_matches for v in variants):
-                entry_dict["pattern"] = r"\b\d{2}\s+\d{2}\s+\d{2}\s+\d{2}\b"
-            self.entities.numbers.append(Entity(**entry_dict))
-            number_count += 1
-        for cpr in all_cpr:
-            self.entities.cpr.append(
-                Entity(id=f"<CPR_NUMBER_{cpr_count}>", variants=[cpr])
-            )
-            cpr_count += 1
+
+            # Sort by score descending to prioritize higher confidence matches
+            sorted_results = sorted(results, key=lambda r: -r.score)
+
+            # Select non-overlapping results, preferring higher scores, but skip unmapped to not block mapped ones
+            selected_results = []
+            for result in sorted_results:
+                if result.entity_type not in type_mapping:
+                    continue  # Skip unmapped entities to avoid blocking
+                overlap = False
+                for sel in selected_results:
+                    if not (result.end <= sel.start or result.start >= sel.end):
+                        overlap = True
+                        break
+                if not overlap:
+                    selected_results.append(result)
+
+            # Process selected results
+            for result in selected_results:
+                o_start, o_end = map_to_original(result.start, result.end)
+                try:
+                    entity_text = text[o_start:o_end].strip()
+                except IndexError:
+                    print(
+                        f"Index error: o_start={o_start}, o_end={o_end}, len(text)={len(text)}"
+                    )
+                    entity_text = ""
+                ent_type = result.entity_type
+                if ent_type in type_mapping:
+                    mapped = type_mapping[ent_type]
+                    if entity_text and entity_text not in all_entities[mapped]:
+                        all_entities[mapped].append(entity_text)
+                        self.counts[f"{mapped}_found"] += 1
+
+        # Process groupings
+        for cat in [
+            "person",
+            "email_address",
+            "location",
+            "phone_number",
+            "date_number",
+            "id_number",
+            "code_number",
+            "general_number",
+        ]:
+            items = all_entities.get(cat, [])
+            if cat == "person":
+                grouped = find_name_variants(items)
+            elif cat == "email_address" or cat == "location":
+                grouped = [[item] for item in items if item]
+            else:
+                threshold = 95 if cat == "date_number" else 80
+                grouped = find_number_variants(items, threshold=threshold)
+            count = 1
+            for variants in grouped:
+                ent_type_upper = cat.upper() if cat != "cpr_number" else "CPR_NUMBER"
+                if cat == "email_address":
+                    ent_type_upper = "EMAIL_ADDRESS"
+                getattr(self.entities, cat).append(
+                    Entity(id=f"<{ent_type_upper}_{count}>", variants=variants)
+                )
+                count += 1
 
     def generate_yaml(self) -> str:
-        """Generate YAML configuration from detected entities."""
-        return yaml.dump(self.entities.model_dump(), sort_keys=False)
+        """Generate YAML configuration from detected entities with all strings quoted."""
+        data = self.entities.model_dump(by_alias=True, exclude_none=True)
+
+        # Function to recursively quote all strings
+        def quote_strings(obj):
+            if isinstance(obj, dict):
+                return {k: quote_strings(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [quote_strings(item) for item in obj]
+            elif isinstance(obj, str):
+                return DoubleQuotedScalarString(obj)  # Wrap strings in double quotes
+            else:
+                return obj  # Leave other types as is
+
+        quoted_data = quote_strings(data)  # Apply quoting to data
+
+        yaml_instance = YAML()  # Create YAML instance
+        stream = io.StringIO()  # Use StringIO for string output
+        yaml_instance.dump(quoted_data, stream)  # Dump the quoted data
+        return stream.getvalue()  # Return the string
 
     def load_replacements(self, config: dict):
         """Load replacements from YAML config using Pydantic validation."""
         self.entities = Config.model_validate(config)
-        entity_type_mapping = {
-            "names": "PERSON",
-            "emails": "EMAIL_ADDRESS",
-            "addresses": "ADDRESS",
-            "numbers": "PHONE_NUMBER",
-            "cpr": "CPR_NUMBER",
-        }
-        for category, entity_type in entity_type_mapping.items():
-            self.entity_mapping[entity_type] = {}
-            for entry in getattr(self.entities, category):
-                for variant in entry.variants:
-                    self.entity_mapping[entity_type][variant] = entry.id
 
     def anonymize(self, text: str) -> tuple:
-        """Anonymize text by detecting entities and applying replacements."""
-        results = self.analyzer.analyze(
-            text=text,
-            entities=[
-                "PERSON",
-                "EMAIL_ADDRESS",
-                "ADDRESS",
-                "PHONE_NUMBER",
-                "NUMBER_PATTERN",
-                "CPR_NUMBER",
-            ],
-            language=self.language,
-        )
-        # Reset counts for this anonymization
+        """Anonymize text by replacing known variants from config with their IDs."""
         self.counts = {k: 0 for k in self.counts}
-        for r in results:
-            if r.entity_type == "PERSON":
-                self.counts["names_found"] += 1
-            elif r.entity_type == "EMAIL_ADDRESS":
-                self.counts["emails_found"] += 1
-            elif r.entity_type == "ADDRESS":
-                self.counts["addresses_found"] += 1
-            elif r.entity_type == "PHONE_NUMBER":
-                self.counts["numbers_found"] += 1
-            elif r.entity_type == "NUMBER_PATTERN":
-                self.counts["patterns_found"] += 1
-                self.counts["numbers_found"] += 1  # Count as number too
-            elif r.entity_type == "CPR_NUMBER":
-                self.counts["cpr_found"] += 1
-        anonymized_result = self.anonymizer_engine.anonymize(
-            text,
-            results,
-            {"DEFAULT": OperatorConfig("entity_counter", {"entity_mapping": self.entity_mapping})},
+        category_mapping = {
+            "person": "person_replaced",
+            "email_address": "email_address_replaced",
+            "location": "location_replaced",
+            "phone_number": "phone_number_replaced",
+            "date_number": "date_number_replaced",
+            "id_number": "id_number_replaced",
+            "code_number": "code_number_replaced",
+            "general_number": "general_number_replaced",
+        }
+        all_replacements = []
+        for cat, replaced_key in category_mapping.items():
+            found_key = replaced_key.replace("_replaced", "_found")
+            entities = getattr(self.entities, cat)
+            for entity in entities:
+                for variant in entity.variants:
+                    escaped = re.escape(variant)
+                    if cat in [
+                        "phone_number",
+                        "date_number",
+                        "id_number",
+                        "code_number",
+                        "general_number",
+                    ] or (cat == "person" and "\n" in variant):
+                        pattern = escaped
+                    elif cat == "location":
+                        pattern = escaped
+                    else:
+                        pattern = r"\b" + escaped + r"\b"
+                    all_replacements.append(
+                        (variant, pattern, entity.id, found_key, replaced_key)
+                    )
+
+        # Sort by variant length descending
+        sorted_replacements = sorted(
+            all_replacements, key=lambda x: len(x[0]), reverse=True
         )
-        # Count replacements
-        self.counts["names_replaced"] = len(re.findall(r"<PERSON_\d+>", anonymized_result.text))
-        self.counts["emails_replaced"] = len(re.findall(r"<EMAIL_ADDRESS_\d+>", anonymized_result.text))
-        self.counts["addresses_replaced"] = len(re.findall(r"<ADDRESS_\d+>", anonymized_result.text))
-        self.counts["numbers_replaced"] = len(re.findall(r"<PHONE_NUMBER_\d+>", anonymized_result.text))
-        self.counts["patterns_replaced"] = self.counts["numbers_replaced"]  # Approximate, as patterns are subset
-        self.counts["cpr_replaced"] = len(re.findall(r"<CPR_NUMBER_\d+>", anonymized_result.text))
-        return anonymized_result.text, self.counts
+
+        for (
+            variant,
+            pattern,
+            replacement,
+            found_key,
+            replaced_key,
+        ) in sorted_replacements:
+            matches = re.findall(pattern, text)
+            count = len(matches)
+            self.counts[found_key] += count
+            self.counts[replaced_key] += count
+            text = re.sub(pattern, replacement, text)
+
+        return text, self.counts
