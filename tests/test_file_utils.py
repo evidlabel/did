@@ -62,6 +62,7 @@ def test_anonymize_file_md(temp_files):
     counts = anonymize_file(md_file, anonymizer, output)
     assert output.exists()
     assert counts["person_found"] == 0  # No persons in sample
+    assert counts["person_replaced"] == 0
 
 
 def test_anonymize_file_txt(temp_files):
@@ -71,6 +72,8 @@ def test_anonymize_file_txt(temp_files):
     output = txt_file.with_stem("output")
     counts = anonymize_file(txt_file, anonymizer, output)
     assert output.exists()
+    assert counts["person_found"] == 0
+    assert counts["person_replaced"] == 0
 
 
 def test_anonymize_file_tex(temp_files):
@@ -80,6 +83,8 @@ def test_anonymize_file_tex(temp_files):
     output = tex_file.with_stem("output")
     counts = anonymize_file(tex_file, anonymizer, output)
     assert output.exists()
+    assert counts["person_found"] == 0
+    assert counts["person_replaced"] == 0
 
 
 def test_anonymize_file_bib(temp_files):
@@ -92,6 +97,7 @@ def test_anonymize_file_bib(temp_files):
     with open(output, "r") as f:
         bib_content = f.read()
         assert "<PERSON_1>" in bib_content
+    assert counts["person_replaced"] == 1
 
 
 def test_anonymize_file_unsupported(tmp_path):
