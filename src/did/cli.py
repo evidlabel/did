@@ -126,14 +126,16 @@ def plain(file, config, output):
         sys.exit(1)
 
 
-def typst(file, config, name_typ):
+def typst(file, config, output):
     """Pseudonymize to Typst files."""
     if config is None:
         print("Error: --config is required")
         sys.exit(1)
     anonymizer = Anonymizer()
     input_path = Path(file)
-    main_path = Path(name_typ)
+    if output is None:
+        output = str(input_path.with_suffix(".typ"))
+    main_path = Path(output)
     if main_path.suffix != ".typ":
         print("Error: Output file must end with .typ")
         sys.exit(1)
@@ -345,19 +347,19 @@ def typst(file, config, name_typ):
         print(f" - {vars_path}")
         print(f" - {fake_path}")
 
-        print("\nPreview of {vars_path.name}:")
+        print(f"\nPreview of {vars_path.name}:")
         with open(vars_path, "r", encoding="utf-8") as f:
             vars_content = f.read()
         syntax = Syntax(vars_content, "rust")
         console.print(syntax)
 
-        print("\nPreview of {fake_path.name}:")
+        print(f"\nPreview of {fake_path.name}:")
         with open(fake_path, "r", encoding="utf-8") as f:
             fake_content = f.read()
         syntax = Syntax(fake_content, "rust")
         console.print(syntax)
 
-        print("\nPreview of {main_path.name}:")
+        print(f"\nPreview of {main_path.name}:")
         with open(main_path, "r", encoding="utf-8") as f:
             main_content = f.read()
         syntax = Syntax(main_content, "rust")
@@ -443,11 +445,10 @@ pseudo_group.commands.append(plain_cmd)
 
 typst_cmd = command(
     name="typst",
-    help="Pseudonymize to Typst files, creating <name>.typ, <name>_vars.typ, <name>_fakevars.typ.",
+    help="Pseudonymize to Typst files, creating <input_stem>.typ, <input_stem>_vars.typ, <input_stem>_fakevars.typ.",
     callback=typst,
     arguments=[
         argument(name="file", arg_type=str, sort_key=0),
-        argument(name="name_typ", arg_type=str, sort_key=1),
     ],
     options=[
         option(
@@ -455,6 +456,13 @@ typst_cmd = command(
             arg_type=str,
             help="Config file",
             sort_key=0,
+        ),
+        option(
+            flags=["--output", "-o"],
+            arg_type=str,
+            default=None,
+            help="Main Typst file path (default: <input>.typ)",
+            sort_key=1,
         ),
     ],
 )
