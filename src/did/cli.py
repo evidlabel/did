@@ -45,7 +45,6 @@ def extract(files, config, language):
         print(f"  ID_NUMBER found: {anonymizer.counts['id_number_found']}")
         print(f"  CODE_NUMBER found: {anonymizer.counts['code_number_found']}")
         print(f"  GENERAL_NUMBER found: {anonymizer.counts['general_number_found']}")
-        print(f"  CPR_NUMBER found: {anonymizer.counts['cpr_number_found']}")
 
         yaml_str = anonymizer.generate_yaml()
         print("Writing YAML config...")
@@ -102,7 +101,6 @@ def plain(file, config, output):
         print(f"  ID_NUMBER replaced: {counts['id_number_replaced']}")
         print(f"  CODE_NUMBER replaced: {counts['code_number_replaced']}")
         print(f"  GENERAL_NUMBER replaced: {counts['general_number_replaced']}")
-        print(f"  CPR_NUMBER replaced: {counts['cpr_number_replaced']}")
 
         console = Console()
         with open(output_path, "r", encoding="utf-8") as f:
@@ -167,7 +165,6 @@ def typst(file, config, output):
             "id_number": 0,
             "code_number": 0,
             "general_number": 0,
-            "cpr_number": 0,
         }
         category_mapping = {
             "person": "person_replaced",
@@ -178,7 +175,6 @@ def typst(file, config, output):
             "id_number": "id_number_replaced",
             "code_number": "code_number_replaced",
             "general_number": "general_number_replaced",
-            "cpr_number": "cpr_number_replaced",
         }
         typst_mappings = {}  # var -> real_value
         fake_mappings = {}  # var -> fake_value
@@ -212,7 +208,6 @@ def typst(file, config, output):
             "id_number",
             "code_number",
             "general_number",
-            "cpr_number",
         ]
         for cat in var_counters:
             prefix = {
@@ -224,7 +219,6 @@ def typst(file, config, output):
                 "id_number": "ID",
                 "code_number": "CD",
                 "general_number": "GN",
-                "cpr_number": "C",
             }[cat]
             entities = getattr(anonymizer.entities, cat)
             for entity in entities:
@@ -273,7 +267,6 @@ def typst(file, config, output):
                             "id_number",
                             "code_number",
                             "general_number",
-                            "cpr_number",
                         ]
                         and "\n" in variant
                     ):
@@ -339,7 +332,6 @@ def typst(file, config, output):
         print(f"  ID_NUMBER replaced: {counts['id_number_replaced']}")
         print(f"  CODE_NUMBER replaced: {counts['code_number_replaced']}")
         print(f"  GENERAL_NUMBER replaced: {counts['general_number_replaced']}")
-        print(f"  CPR_NUMBER replaced: {counts['cpr_number_replaced']}")
 
         console = Console()
         print(f"\nTypst files written to {main_path.parent}")
