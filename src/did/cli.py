@@ -70,12 +70,12 @@ def extract(files, config, language):
         sys.exit(1)
 
 
-def pseudo(file, config, output, language, typst):
+def pseudo(file, config, output, typst):
     """Pseudonymize text files using YAML config."""
     if config is None:
         print("Error: --config is required")
         sys.exit(1)
-    anonymizer = Anonymizer(language=language)
+    anonymizer = Anonymizer()
     input_path = Path(file)
     if output is None and not typst:
         output = str(
@@ -402,13 +402,6 @@ pseudo_cmd = command(
             default=None,
             help="Output file path",
             sort_key=1,
-        ),
-        option(
-            flags=["--language", "-l"],
-            arg_type=str,
-            default="en",
-            help="Language for entity detection (e.g., 'en', 'da')",
-            sort_key=2,
         ),
         option(
             flags=["--typst", "-t"],
