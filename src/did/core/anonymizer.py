@@ -25,7 +25,7 @@ def get_custom_recognizers(language):
     general_patterns = [
         Pattern(
             name="general_number",
-            regex=r"[+(\d][\d\.\-,/()+ ]*\d(?:[.,+ ]?[a-zA-Z]{1,3})?",
+            regex=r"[+(\d][\d\.\-,/()+ ]*\d(?:[.,+][a-zA-Z]{1,3})?",
             score=0.7,
         ),
         Pattern(name="DIGIT_SEQUENCE", regex=r"\b\d{4,6}\b", score=0.8),
@@ -181,12 +181,12 @@ class Anonymizer:
         while i < len(text):
             if (
                 i > 0
-                and text[i - 1].isalpha()
+                and (text[i - 1].isalpha() or text[i - 1].isdigit())
                 and text[i] == "-"
                 and i + 1 < len(text)
                 and text[i + 1] == "\n"
                 and i + 2 < len(text)
-                and text[i + 2].isalpha()
+                and (text[i + 2].isalpha() or text[i + 2].isdigit())
             ):
                 i += 2  # Skip -\n
                 continue
@@ -251,7 +251,7 @@ class Anonymizer:
             for result in selected_results:
                 o_start, o_end = map_to_original(result.start, result.end)
                 try:
-                    entity_text = text[o_start:o_end]
+                    entity_text = text[o_start:o_end].strip()
                 except IndexError:
                     print(
                         f"Index error: o_start={o_start}, o_end={o_end}, len(text)={len(text)}"
@@ -334,47 +334,46 @@ class Anonymizer:
             "general_number": "general_number_replaced",
             "cpr_number": "cpr_number_replaced",
         }
+        all_replacements = []
         for cat, replaced_key in category_mapping.items():
             found_key = replaced_key.replace("_replaced", "_found")
             entities = getattr(self.entities, cat)
             for entity in entities:
-                sorted_variants = sorted(entity.variants, key=len, reverse=True)
-                for variant in sorted_variants:
+                for variant in entity.variants:
                     escaped = re.escape(variant)
-                    if (
-                        cat
-                        in [
-                            "person",
-                            "phone_number",
-                            "date_number",
-                            "id_number",
-                            "code_number",
-                            "general_number",
-                            "cpr_number",
-                        ]
-                        and "\n" in variant
-                    ):
+                    if cat in [
+                        "phone_number",
+                        "date_number",
+                        "id_number",
+                        "code_number",
+                        "general_number",
+                        "cpr_number",
+                    ] or (cat == "person" and "\n" in variant):
                         pattern = escaped
                     elif cat == "location":
                         pattern = escaped
                     else:
                         pattern = r"\b" + escaped + r"\b"
-                    count = len(re.findall(pattern, text))
-                    self.counts[found_key] += count
-                    self.counts[replaced_key] += count
-                    replacement = (
-                        f'"{entity.id}"'
-                        if cat
-                        in [
-                            "phone_number",
-                            "date_number",
-                            "id_number",
-                            "code_number",
-                            "general_number",
-                            "cpr_number",
-                        ]
-                        else entity.id
+                    all_replacements.append(
+                        (variant, pattern, entity.id, found_key, replaced_key)
                     )
-                    # Surround with quotes for numbers and CPR
-                    text = re.sub(pattern, replacement, text)
+
+        # Sort by variant length descending
+        sorted_replacements = sorted(
+            all_replacements, key=lambda x: len(x[0]), reverse=True
+        )
+
+        for (
+            variant,
+            pattern,
+            replacement,
+            found_key,
+            replaced_key,
+        ) in sorted_replacements:
+            matches = re.findall(pattern, text)
+            count = len(matches)
+            self.counts[found_key] += count
+            self.counts[replaced_key] += count
+            text = re.sub(pattern, replacement, text)
+
         return text, self.counts
