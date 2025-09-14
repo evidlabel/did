@@ -36,16 +36,6 @@ def get_custom_recognizers(language):
             supported_entity="GENERAL_NUMBER",
             patterns=general_patterns,
             context=["account", "phone", "code", "number", "id", "tel", "mobil"],
-            denial_context=[
-                "st",
-                "street",
-                "ave",
-                "blvd",
-                "rd",
-                "vej",
-                "gade",
-                "adresse",
-            ],
             supported_language=language,
         )
     )
