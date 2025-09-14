@@ -17,13 +17,6 @@ uv pip install https://github.com/evidlabel/did.git
 ```
 
 ## Quick Usage
-Extract entities:
-```bash
-did ex -f input.txt -c config.yaml
-```
-Anonymize:
-```bash
-did an -f input.txt -c config.yaml -o output.txt -t typ
-```
 
+![help](docs/assets/help.svg)
 For details, see the [documentation](docs/index.md).
