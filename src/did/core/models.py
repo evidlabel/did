@@ -22,4 +22,3 @@ class Config(BaseModel):
     id_number: list[Entity] = Field(alias="ID_NUMBER", default_factory=list)
     code_number: list[Entity] = Field(alias="CODE_NUMBER", default_factory=list)
     general_number: list[Entity] = Field(alias="GENERAL_NUMBER", default_factory=list)
-    cpr_number: list[Entity] = Field(alias="CPR_NUMBER", default_factory=list)
