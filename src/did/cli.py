@@ -3,7 +3,7 @@
 import sys
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent.parent.parent / "treeparse" / "src"))
+sys.path.append(str(Path(__file__).parent.parent.parent.parent / "treeparse" / "src"))
 from treeparse import cli, command, argument, option
 import ruamel.yaml as yaml  # Switched from PyYAML to ruamel.yaml
 from rich.console import Console
