@@ -361,7 +361,7 @@ extract_cmd = command(
     help="Extract entities from input text files and generate a YAML configuration file.",
     callback=extract,
     arguments=[
-        argument(name="files", arg_type=str, nargs=-1, sort_key=0),
+        argument(name="files", arg_type=str, nargs="*", sort_key=0),
     ],
     options=[
         option(
