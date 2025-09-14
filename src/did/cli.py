@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+
 sys.path.append(str(Path(__file__).parent.parent.parent.parent / "treeparse" / "src"))
 from treeparse import cli, command, argument, option, group
 import ruamel.yaml as yaml  # Switched from PyYAML to ruamel.yaml
@@ -43,9 +44,7 @@ def extract(files, config, language):
         print(f"  DATE_NUMBER found: {anonymizer.counts['date_number_found']}")
         print(f"  ID_NUMBER found: {anonymizer.counts['id_number_found']}")
         print(f"  CODE_NUMBER found: {anonymizer.counts['code_number_found']}")
-        print(
-            f"  GENERAL_NUMBER found: {anonymizer.counts['general_number_found']}"
-        )
+        print(f"  GENERAL_NUMBER found: {anonymizer.counts['general_number_found']}")
 
         yaml_str = anonymizer.generate_yaml()
         print("Writing YAML config...")
@@ -101,9 +100,7 @@ def plain(file, config, output):
         print(f"  DATE_NUMBER replaced: {counts['date_number_replaced']}")
         print(f"  ID_NUMBER replaced: {counts['id_number_replaced']}")
         print(f"  CODE_NUMBER replaced: {counts['code_number_replaced']}")
-        print(
-            f"  GENERAL_NUMBER replaced: {counts['general_number_replaced']}"
-        )
+        print(f"  GENERAL_NUMBER replaced: {counts['general_number_replaced']}")
 
         console = Console()
         with open(output_path, "r", encoding="utf-8") as f:
@@ -155,9 +152,7 @@ def typst(file, config, output):
         print(f"Processing {file}...")
 
         if input_path.suffix not in [".md", ".txt"]:
-            print(
-                "Typst export currently supported only for .md and .txt files."
-            )
+            print("Typst export currently supported only for .md and .txt files.")
             sys.exit(1)
 
         # Generate Typst mappings and real values per variant
@@ -336,9 +331,7 @@ def typst(file, config, output):
         print(f"  DATE_NUMBER replaced: {counts['date_number_replaced']}")
         print(f"  ID_NUMBER replaced: {counts['id_number_replaced']}")
         print(f"  CODE_NUMBER replaced: {counts['code_number_replaced']}")
-        print(
-            f"  GENERAL_NUMBER replaced: {counts['general_number_replaced']}"
-        )
+        print(f"  GENERAL_NUMBER replaced: {counts['general_number_replaced']}")
 
         console = Console()
         print(f"\nTypst files written to {main_path.parent}")
@@ -412,7 +405,9 @@ extract_cmd = command(
 )
 app.commands.append(extract_cmd)
 
-pseudo_group = group(name="pseudo", help="Pseudonymize input text file using a YAML configuration.")
+pseudo_group = group(
+    name="pseudo", help="Pseudonymize input text file using a YAML configuration."
+)
 app.subgroups.append(pseudo_group)
 
 plain_cmd = command(
@@ -465,8 +460,10 @@ typst_cmd = command(
 )
 pseudo_group.commands.append(typst_cmd)
 
+
 def main():
     app.run()
+
 
 if __name__ == "__main__":
     main()
