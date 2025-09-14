@@ -30,12 +30,23 @@ def get_custom_recognizers(language):
         ),
         Pattern(name="DIGIT_SEQUENCE", regex=r"\b\d{4,6}\b", score=0.8),
         Pattern(name="four_digit_code", regex=r"\b\d{4}\b", score=0.6),
+        Pattern(name="cpr_number", regex=r"\b\d{6}-\d{4}\b", score=0.6),
     ]
     recognizers.append(
         PatternRecognizer(
             supported_entity="GENERAL_NUMBER",
             patterns=general_patterns,
-            context=["account", "phone", "code", "number", "id", "tel", "mobil"],
+            context=[
+                "account",
+                "phone",
+                "code",
+                "number",
+                "id",
+                "tel",
+                "mobil",
+                "cpr",
+                "personnummer",
+            ],
             supported_language=language,
         )
     )
@@ -84,18 +95,6 @@ def get_custom_recognizers(language):
             supported_language=language,
         )
     )
-
-    # CPR Number (Danish SSN) - only for 'da'
-    if language == "da":
-        cpr_patterns = [Pattern(name="cpr_number", regex=r"\b\d{6}-\d{4}\b", score=0.6)]
-        recognizers.append(
-            PatternRecognizer(
-                supported_entity="CPR_NUMBER",
-                patterns=cpr_patterns,
-                context=["cpr", "personnummer"],
-                supported_language=language,
-            )
-        )
 
     return recognizers
 
@@ -168,8 +167,6 @@ class Anonymizer:
             "code_number_replaced": 0,
             "general_number_found": 0,
             "general_number_replaced": 0,
-            "cpr_number_found": 0,
-            "cpr_number_replaced": 0,
         }
         self.entities: Config = Config()
         self.language = language
@@ -220,7 +217,6 @@ class Anonymizer:
             "DATE_NUMBER": "date_number",
             "ID_NUMBER": "id_number",
             "CODE_NUMBER": "code_number",
-            "CPR_NUMBER": "cpr_number",
         }
         all_entities = defaultdict(list)
         for text in texts:
@@ -275,7 +271,6 @@ class Anonymizer:
             "id_number",
             "code_number",
             "general_number",
-            "cpr_number",
         ]:
             items = all_entities.get(cat, [])
             if cat == "person":
@@ -333,7 +328,6 @@ class Anonymizer:
             "id_number": "id_number_replaced",
             "code_number": "code_number_replaced",
             "general_number": "general_number_replaced",
-            "cpr_number": "cpr_number_replaced",
         }
         all_replacements = []
         for cat, replaced_key in category_mapping.items():
@@ -348,7 +342,6 @@ class Anonymizer:
                         "id_number",
                         "code_number",
                         "general_number",
-                        "cpr_number",
                     ] or (cat == "person" and "\n" in variant):
                         pattern = escaped
                     elif cat == "location":
