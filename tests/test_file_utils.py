@@ -1,10 +1,8 @@
 """Tests for file_utils."""
 
 import pytest
-from pathlib import Path
 from did.file_utils import extract_text, anonymize_file, md_to_typst
 from did.core.anonymizer import Anonymizer
-import bibtexparser
 
 
 @pytest.fixture
@@ -14,7 +12,9 @@ def temp_files(tmp_path):
     txt_file = tmp_path / "test.txt"
     txt_file.write_text("Plain text")
     tex_file = tmp_path / "test.tex"
-    tex_file.write_text("\\documentclass{article} \\begin{document} Hello \\end{document}")
+    tex_file.write_text(
+        "\\documentclass{article} \\begin{document} Hello \\end{document}"
+    )
     bib_file = tmp_path / "test.bib"
     bib_file.write_text("@article{test, title={Test Title}, author={John Doe}}")
     return md_file, txt_file, tex_file, bib_file
@@ -47,8 +47,8 @@ def test_extract_text_bib(temp_files):
     assert "John Doe" in text
 
 
-def test_extract_text_unsupported(tmp_files):
-    unsupported = tmp_files[0].with_suffix(".pdf")
+def test_extract_text_unsupported(tmp_path):
+    unsupported = tmp_path / "test.pdf"
     unsupported.write_text("Dummy")
     with pytest.raises(ValueError, match="Unsupported file type: .pdf"):
         extract_text(unsupported)
@@ -94,8 +94,8 @@ def test_anonymize_file_bib(temp_files):
         assert "<PERSON_1>" in bib_content
 
 
-def test_anonymize_file_unsupported(temp_files):
-    unsupported = temp_files[0].with_suffix(".pdf")
+def test_anonymize_file_unsupported(tmp_path):
+    unsupported = tmp_path / "test.pdf"
     unsupported.write_text("Dummy")
     anonymizer = Anonymizer(language="en")
     output = unsupported.with_stem("output")
