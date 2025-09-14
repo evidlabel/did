@@ -17,34 +17,82 @@ from ..utils import find_name_variants, find_number_variants
 from collections import defaultdict
 
 
-def get_custom_digit_recognizer():
-    patterns = [
-        Pattern(name="DIGIT_SEQUENCE", regex=r"\b\d{4,6}\b", score=0.8),
+def get_custom_recognizers():
+    """Return a list of custom PatternRecognizers for different entity types."""
+    recognizers = []
+
+    # General Number
+    general_patterns = [
         Pattern(
             name="general_number",
             regex=r"[+(\d][\d\.\-,/()+ ]*(?:[.,+ ][a-zA-Z]{1,3})?",
             score=0.7,
         ),
+        Pattern(name="DIGIT_SEQUENCE", regex=r"\b\d{4,6}\b", score=0.8),
+        Pattern(name="four_digit_code", regex=r"\b\d{4}\b", score=0.6),
+    ]
+    recognizers.append(
+        PatternRecognizer(
+            supported_entity="GENERAL_NUMBER",
+            patterns=general_patterns,
+            supported_language="da",
+        )
+    )
+
+    # Date Number
+    date_patterns = [
         Pattern(
             name="date_number", regex=r"\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b", score=0.7
         ),
+        Pattern(name="dotted_triplet", regex=r"\d{2}\.\d{2}\.\d{2}", score=0.7),
+    ]
+    recognizers.append(
+        PatternRecognizer(
+            supported_entity="DATE_NUMBER",
+            patterns=date_patterns,
+            supported_language="da",
+        )
+    )
+
+    # ID Number
+    id_patterns = [
         Pattern(name="id_code", regex=r"\b\d{3,}[-\d]{3,}\s*\(\d{3,}\)\b", score=0.8),
         Pattern(name="year_based_id", regex=r"\b\d{4}-\d{5}\b", score=0.8),
+    ]
+    recognizers.append(
+        PatternRecognizer(
+            supported_entity="ID_NUMBER", patterns=id_patterns, supported_language="da"
+        )
+    )
+
+    # Code Number
+    code_patterns = [
         Pattern(name="parenthesized_code", regex=r"\(\d{6}\)", score=0.8),
-        Pattern(name="four_digit_code", regex=r"\b\d{4}\b", score=0.6),
         Pattern(
             name="channel_identifier",
             regex=r"\b\d{1,2},\d{1,2}\.[a-zA-Z]{2,3}\b",
             score=0.7,
         ),
-        Pattern(name="dotted_triplet", regex=r"\d{2}\.\d{2}\.\d{2}", score=0.7),
     ]
-
-    return PatternRecognizer(
-        supported_entity="DIGIT_SEQ",
-        patterns=patterns,
-        supported_language="da",
+    recognizers.append(
+        PatternRecognizer(
+            supported_entity="CODE_NUMBER",
+            patterns=code_patterns,
+            supported_language="da",
+        )
     )
+
+    # CPR Number (Danish SSN)
+    cpr_patterns = [Pattern(name="cpr_number", regex=r"\b\d{6}-\d{4}\b", score=0.9)]
+    recognizers.append(
+        PatternRecognizer(
+            supported_entity="CPR_NUMBER",
+            patterns=cpr_patterns,
+            supported_language="da",
+        )
+    )
+
+    return recognizers
 
 
 def filter_non_overlapping(base_results, extra_results):
@@ -64,7 +112,7 @@ def filter_non_overlapping(base_results, extra_results):
 class Anonymizer:
     """Handles entity detection and anonymization."""
 
-    def __init__(self, language="da"):
+    def __init__(self, language="en"):
         # Configure spaCy model based on language
         conf = {
             "nlp_engine_name": "spacy",
@@ -88,8 +136,8 @@ class Anonymizer:
         registry.load_predefined_recognizers(languages=[language, "en"])
         registry.add_recognizer(EmailRecognizer(supported_language=language))
         registry.add_recognizer(PhoneRecognizer(supported_language=language))
-        self.digit_recognizer = get_custom_digit_recognizer()
-        registry.add_recognizer(self.digit_recognizer)
+        for custom_recognizer in get_custom_recognizers():
+            registry.add_recognizer(custom_recognizer)
 
         self.analyzer = AnalyzerEngine(
             registry=registry,
@@ -162,7 +210,11 @@ class Anonymizer:
             "LOCATION": "location",
             "PHONE_NUMBER": "phone_number",
             "DATE_TIME": "date_number",
-            "DIGIT_SEQ": "general_number",
+            "GENERAL_NUMBER": "general_number",
+            "DATE_NUMBER": "date_number",
+            "ID_NUMBER": "id_number",
+            "CODE_NUMBER": "code_number",
+            "CPR_NUMBER": "cpr_number",
         }
         all_entities = defaultdict(list)
         for text in texts:
@@ -174,21 +226,29 @@ class Anonymizer:
                 entities=None,
             )
 
-            # 2. Run custom recognizer
-            digit_results = self.digit_recognizer.analyze(
-                text=detection_text,
-                entities=["DIGIT_SEQ"],
-                nlp_artifacts=None,
-            )
+            # 2. Run custom recognizers
+            custom_results = []
+            for recognizer in self.analyzer.registry.recognizers:
+                if (
+                    isinstance(recognizer, PatternRecognizer)
+                    and recognizer.supported_entity in type_mapping
+                ):
+                    custom_results.extend(
+                        recognizer.analyze(
+                            text=detection_text,
+                            entities=[recognizer.supported_entity],
+                            nlp_artifacts=None,
+                        )
+                    )
 
             # 3. Filter overlapping matches
-            extra_digit_results = filter_non_overlapping(
-                standard_results, digit_results
+            extra_custom_results = filter_non_overlapping(
+                standard_results, custom_results
             )
 
             # Combine and sort results
             all_results = sorted(
-                standard_results + extra_digit_results, key=lambda r: r.start
+                standard_results + extra_custom_results, key=lambda r: r.start
             )
 
             for result in all_results:
