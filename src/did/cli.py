@@ -353,7 +353,6 @@ app = cli(
     show_types=True,
     show_defaults=True,
     line_connect=True,
-    theme="monochrome",
 )
 
 extract_cmd = command(
