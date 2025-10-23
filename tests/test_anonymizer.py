@@ -1,7 +1,7 @@
 """Tests for the Anonymizer."""
 
 import pytest
-import ruamel.yaml as yaml  # Import for ruamel.yaml usage
+import ruamel.yaml as yaml
 from did.core.anonymizer import Anonymizer
 import sys
 import io
@@ -15,9 +15,9 @@ def anonymizer():
 
 def test_extract_empty_text(anonymizer):
     anonymizer.detect_entities([""])
-    yaml_obj = yaml.YAML()  # Use ruamel.yaml YAML object
+    yaml_obj = yaml.YAML()
     config_str = anonymizer.generate_yaml()
-    config = yaml_obj.load(config_str)  # Load from string
+    config = yaml_obj.load(config_str)
     assert config["PERSON"] == []
     assert config["EMAIL_ADDRESS"] == []
     assert config["LOCATION"] == []
@@ -131,7 +131,7 @@ def test_anonymize_mixed_content(anonymizer):
     assert counts["person_replaced"] >= 4
     assert (
         counts["phone_number_found"] + counts["general_number_found"] >= 4
-    )  # Including CPR as general
+    )
     assert counts["location_found"] >= 1
     assert counts["location_replaced"] >= 1
 
@@ -156,11 +156,11 @@ def test_cli_extract(tmp_path):
     sys.argv = old_argv
     output = out.getvalue()
 
-    assert "PERSON found: 2" in output  # Grouped
+    assert "PERSON found: 2" in output
     assert config_file.exists()
-    yaml_obj = yaml.YAML()  # Use ruamel.yaml YAML object
+    yaml_obj = yaml.YAML()
     with open(config_file, "r") as f:
-        config = yaml_obj.load(f)  # Load using YAML object
+        config = yaml_obj.load(f)
         assert len(config["PERSON"]) >= 1
         assert any(
             "123456-1234" in entry["variants"]
@@ -176,7 +176,6 @@ def test_cli_anonymize(tmp_path):
     original_text = "Hello John Doe and Jon Doe, CPR: 123456-1234"
     input_file.write_text(original_text)
 
-    # First extract to generate config
     old_argv = sys.argv
     sys.argv = ["did", "extract", str(input_file), "--config", str(config_file)]
     from did.cli import main
@@ -189,7 +188,6 @@ def test_cli_anonymize(tmp_path):
                 raise
     sys.argv = old_argv
 
-    # Modify the input file to add new content
     modified_text = (
         original_text
         + " and John Doe again, and new person Alice, new CPR: 987654-4321"
@@ -222,4 +220,4 @@ def test_cli_anonymize(tmp_path):
         assert "<PERSON_1>" in content
         assert "Alice" in content
         assert "987654-4321" in content
-        assert content.count("<PERSON_1>") == 3  # Variants of John Doe
+        assert content.count("<PERSON_1>") == 3

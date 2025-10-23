@@ -1,9 +1,9 @@
 """Anonymizer class for entity detection and anonymization."""
 
 import re
-import io  # Added for StringIO
-from ruamel.yaml import YAML  # Explicitly using ruamel.yaml
-from ruamel.yaml.scalarstring import DoubleQuotedScalarString  # For quoting strings
+import io
+from ruamel.yaml import YAML
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 from presidio_analyzer import (
     AnalyzerEngine,
     PatternRecognizer,
@@ -21,7 +21,6 @@ def get_custom_recognizers(language):
     """Return a list of custom PatternRecognizers for different entity types."""
     recognizers = []
 
-    # General Number
     general_patterns = [
         Pattern(
             name="general_number",
@@ -51,7 +50,6 @@ def get_custom_recognizers(language):
         )
     )
 
-    # Date Number
     date_patterns = [
         Pattern(
             name="date_number", regex=r"\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b", score=0.7
@@ -66,7 +64,6 @@ def get_custom_recognizers(language):
         )
     )
 
-    # ID Number
     id_patterns = [
         Pattern(name="id_code", regex=r"\b\d{3,}[-\d]{3,}\s*\(\d{3,}\)\b", score=0.8),
         Pattern(name="year_based_id", regex=r"\b\d{4}-\d{5}\b", score=0.8),
@@ -79,7 +76,6 @@ def get_custom_recognizers(language):
         )
     )
 
-    # Code Number
     code_patterns = [
         Pattern(name="parenthesized_code", regex=r"\(\d{6}\)", score=0.8),
         Pattern(
@@ -117,7 +113,6 @@ class Anonymizer:
     """Handles entity detection and anonymization."""
 
     def __init__(self, language="en"):
-        # Configure spaCy model based on language
         conf = {
             "nlp_engine_name": "spacy",
             "models": [
@@ -186,7 +181,7 @@ class Anonymizer:
                 and i + 2 < len(text)
                 and (text[i + 2].isalpha() or text[i + 2].isdigit())
             ):
-                i += 2  # Skip -\n
+                i += 2
                 continue
             detection_text += text[i]
             positions.append(i)
@@ -221,21 +216,18 @@ class Anonymizer:
         all_entities = defaultdict(list)
         for text in texts:
             detection_text, map_to_original = self.preprocess_text(text)
-            # Run all recognizers
             results = self.analyzer.analyze(
                 text=detection_text,
                 language=self.language,
                 entities=None,
             )
 
-            # Sort by score descending to prioritize higher confidence matches
             sorted_results = sorted(results, key=lambda r: -r.score)
 
-            # Select non-overlapping results, preferring higher scores, but skip unmapped to not block mapped ones
             selected_results = []
             for result in sorted_results:
                 if result.entity_type not in type_mapping:
-                    continue  # Skip unmapped entities to avoid blocking
+                    continue
                 overlap = False
                 for sel in selected_results:
                     if not (result.end <= sel.start or result.start >= sel.end):
@@ -244,15 +236,11 @@ class Anonymizer:
                 if not overlap:
                     selected_results.append(result)
 
-            # Process selected results
             for result in selected_results:
                 o_start, o_end = map_to_original(result.start, result.end)
                 try:
                     entity_text = text[o_start:o_end].strip()
                 except IndexError:
-                    print(
-                        f"Index error: o_start={o_start}, o_end={o_end}, len(text)={len(text)}"
-                    )
                     entity_text = ""
                 ent_type = result.entity_type
                 if ent_type in type_mapping:
@@ -261,7 +249,6 @@ class Anonymizer:
                         all_entities[mapped].append(entity_text)
                         self.counts[f"{mapped}_found"] += 1
 
-        # Process groupings
         for cat in [
             "person",
             "email_address",
@@ -294,23 +281,22 @@ class Anonymizer:
         """Generate YAML configuration from detected entities with all strings quoted."""
         data = self.entities.model_dump(by_alias=True, exclude_none=True)
 
-        # Function to recursively quote all strings
         def quote_strings(obj):
             if isinstance(obj, dict):
                 return {k: quote_strings(v) for k, v in obj.items()}
             elif isinstance(obj, list):
                 return [quote_strings(item) for item in obj]
             elif isinstance(obj, str):
-                return DoubleQuotedScalarString(obj)  # Wrap strings in double quotes
+                return DoubleQuotedScalarString(obj)
             else:
-                return obj  # Leave other types as is
+                return obj
 
-        quoted_data = quote_strings(data)  # Apply quoting to data
+        quoted_data = quote_strings(data)
 
-        yaml_instance = YAML()  # Create YAML instance
-        stream = io.StringIO()  # Use StringIO for string output
-        yaml_instance.dump(quoted_data, stream)  # Dump the quoted data
-        return stream.getvalue()  # Return the string
+        yaml_instance = YAML()
+        stream = io.StringIO()
+        yaml_instance.dump(quoted_data, stream)
+        return stream.getvalue()
 
     def load_replacements(self, config: dict):
         """Load replacements from YAML config using Pydantic validation."""
@@ -352,7 +338,6 @@ class Anonymizer:
                         (variant, pattern, entity.id, found_key, replaced_key)
                     )
 
-        # Sort by variant length descending
         sorted_replacements = sorted(
             all_replacements, key=lambda x: len(x[0]), reverse=True
         )
