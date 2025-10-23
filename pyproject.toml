@@ -51,3 +51,6 @@ include = ["src/did"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+addopts = "--cov=src/did --cov-report=term-missing"
