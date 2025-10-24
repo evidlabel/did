@@ -1,7 +1,7 @@
 """Tests for file_utils."""
 
 import pytest
-from did.file_utils import extract_text, anonymize_file, md_to_typst
+from did.utils.file_utils import extract_text, anonymize_file, md_to_typst
 from did.core.anonymizer import Anonymizer
 
 
@@ -50,9 +50,9 @@ def test_extract_text_bib(temp_files):
 
 
 def test_extract_text_unsupported(tmp_path):
-    unsupported = tmp_path / "test.pdf"
+    unsupported = tmp_path / "test.docx"
     unsupported.write_text("Dummy")
-    with pytest.raises(ValueError, match="Unsupported file type: .pdf"):
+    with pytest.raises(ValueError, match="Unsupported file type: .docx"):
         extract_text(unsupported)
 
 
@@ -103,11 +103,11 @@ def test_anonymize_file_bib(temp_files):
 
 
 def test_anonymize_file_unsupported(tmp_path):
-    unsupported = tmp_path / "test.pdf"
+    unsupported = tmp_path / "test.docx"
     unsupported.write_text("Dummy")
     anonymizer = Anonymizer(language="en")
     output = unsupported.with_stem("output")
-    with pytest.raises(ValueError, match="Unsupported file type: .pdf"):
+    with pytest.raises(ValueError, match="Unsupported file type: .docx"):
         anonymize_file(unsupported, anonymizer, output)
 
 

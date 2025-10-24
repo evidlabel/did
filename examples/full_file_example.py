@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from did.core.anonymizer import Anonymizer
-from did.file_utils import extract_text, anonymize_file, export_to_typst
+from did.utils.file_utils import extract_text, anonymize_file, export_to_typst
 import io
 import ruamel.yaml as yaml
 

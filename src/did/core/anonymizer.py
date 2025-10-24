@@ -13,7 +13,7 @@ from presidio_analyzer import (
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_analyzer.predefined_recognizers import EmailRecognizer, PhoneRecognizer
 from .models import Config, Entity
-from ..utils import find_name_variants, find_number_variants
+from ..utils.entity_utils import find_name_variants, find_number_variants
 from collections import defaultdict
 
 
@@ -116,7 +116,7 @@ class Anonymizer:
         conf = {
             "nlp_engine_name": "spacy",
             "models": [
-                {"lang_code": "da", "model_name": "da_core_news_md"},
+                {"lang_code": "da", "model_name": "da_core_news_lg"},
                 {"lang_code": "en", "model_name": "en_core_web_md"},
             ],
             "ner_model_configuration": {
@@ -165,6 +165,7 @@ class Anonymizer:
         }
         self.entities: Config = Config()
         self.language = language
+        self.model_map = {"en": "en_core_web_md", "da": "da_core_news_lg"}
 
     def preprocess_text(self, text: str):
         """Preprocess text to join hyphenated multi-line words for detection."""
@@ -202,6 +203,8 @@ class Anonymizer:
 
     def detect_entities(self, texts: list):
         """Detect entities in multiple texts using Presidio."""
+        model_used = self.model_map.get(self.language, "unknown")
+        print(f"Using spaCy model: {model_used} for language {self.language}")
         type_mapping = {
             "PERSON": "person",
             "EMAIL_ADDRESS": "email_address",
@@ -262,6 +265,14 @@ class Anonymizer:
             items = all_entities.get(cat, [])
             if cat == "person":
                 grouped = find_name_variants(items)
+                # Add possessive variants after grouping
+                for i, variants in enumerate(grouped):
+                    extended = set(variants)
+                    for name in variants:
+                        if not name.endswith("'s") and not name.endswith("s"):
+                            extended.add(name + "'s")
+                            extended.add(name + "s")
+                    grouped[i] = list(extended)
             elif cat == "email_address" or cat == "location":
                 grouped = [[item] for item in items if item]
             else:

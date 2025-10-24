@@ -6,7 +6,7 @@ from treeparse import group, command, argument, option
 import ruamel.yaml as yaml
 from rich.console import Console
 from rich.syntax import Syntax
-from ..file_utils import extract_text, anonymize_file, export_to_typst
+from ..utils.file_utils import extract_text, anonymize_file, export_to_typst
 from ..core.anonymizer import Anonymizer
 import re
 import random

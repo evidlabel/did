@@ -3,15 +3,23 @@
 from pathlib import Path
 import re
 import bibtexparser
-from .core.anonymizer import Anonymizer
+from ..core.anonymizer import Anonymizer
 import random
 
 
 def extract_text(file_path: Path) -> str:
     """Extract processable text from the file based on its type."""
-    if file_path.suffix in [".md", ".txt"]:
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read()
+    if file_path.suffix in [".md", ".txt", ".pdf"]:
+        if file_path.suffix == ".pdf":
+            import fitz
+            doc = fitz.open(file_path)
+            text = ""
+            for page in doc:
+                text += page.get_text()
+            return text
+        else:
+            with open(file_path, "r", encoding="utf-8") as f:
+                return f.read()
     elif file_path.suffix == ".tex":
         with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
@@ -35,9 +43,15 @@ def extract_text(file_path: Path) -> str:
 def anonymize_file(input_path: Path, anonymizer: Anonymizer, output_path: Path) -> dict:
     """Anonymize the file using the provided anonymizer and return counts."""
     counts = {k: 0 for k in anonymizer.counts}
-    if input_path.suffix in [".md", ".txt", ".tex"]:
+    if input_path.suffix in [".md", ".txt", ".tex", ".pdf"]:
         with open(input_path, "r", encoding="utf-8") as f:
             text = f.read()
+        if input_path.suffix == ".pdf":
+            import fitz
+            doc = fitz.open(input_path)
+            text = ""
+            for page in doc:
+                text += page.get_text()
         anonymized_text, field_counts = anonymizer.anonymize(text)
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(anonymized_text)
@@ -80,15 +94,15 @@ def md_to_typst(md: str) -> str:
     return md
 
 
-def export_to_typst(input_path: Path, anonymizer: Anonymizer, main_path: Path) -> None:
+def export_to_typst(input_path: Path, anonymizer: Anonymizer, main_path: Path, vars_filename: str = None, fakevars_filename: str = None) -> None:
     """Export anonymized content to Typst files."""
-    if input_path.suffix not in [".md", ".txt"]:
-        raise ValueError("Typst export currently supported only for .md and .txt files.")
+    if input_path.suffix not in [".md", ".txt", ".pdf"]:
+        raise ValueError("Typst export currently supported only for .md, .txt, and .pdf files.")
 
     stem = main_path.stem
     parent = main_path.parent
-    vars_path = parent / f"{stem}_vars.typ"
-    fake_path = parent / f"{stem}_fakevars.typ"
+    vars_path = parent / (vars_filename if vars_filename else f"{stem}_vars.typ")
+    fake_path = parent / (fakevars_filename if fakevars_filename else f"{vars_path.stem}fake.typ")
 
     # Generate Typst mappings
     var_counters = {
@@ -216,24 +230,47 @@ def export_to_typst(input_path: Path, anonymizer: Anonymizer, main_path: Path) -
 
     anonymized_text = text
 
+    # Add empty line after lines ending with period
+    lines = anonymized_text.split('\n')
+    new_lines = []
+    for line in lines:
+        new_lines.append(line)
+        if line.strip().endswith('.'):
+            new_lines.append('')
+    anonymized_text = '\n'.join(new_lines)
+
+    # Remove sequences of multiple blank lines, reduce to single blank line
+    cleaned_lines = []
+    for line in new_lines:
+        if line.strip() == '':
+            if not cleaned_lines or cleaned_lines[-1].strip() != '':
+                cleaned_lines.append(line)
+        else:
+            cleaned_lines.append(line)
+    anonymized_text = '\n'.join(cleaned_lines)
+
     parent.mkdir(parents=True, exist_ok=True)
 
-    # Write vars.typ
-    with open(vars_path, "w", encoding="utf-8") as f:
-        for var, val in typst_mappings.items():
-            escaped = val.replace("\\", "\\\\").replace('"', '\\"')
-            f.write(f'#let {var} = "{escaped}"\n')
+    # Write vars.typ if not exists
+    if not vars_path.exists():
+        with open(vars_path, "w", encoding="utf-8") as f:
+            for var, val in typst_mappings.items():
+                escaped = val.replace("\\", "\\\\").replace('"', '\\"')
+                f.write(f'#let {var} = "{escaped}"\n')
 
-    # Write fakevars.typ
-    with open(fake_path, "w", encoding="utf-8") as f:
-        for var, val in fake_mappings.items():
-            escaped = val.replace("\\", "\\\\").replace('"', '\\"')
-            f.write(f'#let {var} = "{escaped}"\n')
+    # Write fakevars.typ if not exists
+    if not fake_path.exists():
+        with open(fake_path, "w", encoding="utf-8") as f:
+            for var, val in fake_mappings.items():
+                escaped = val.replace("\\", "\\\\").replace('"', '\\"')
+                f.write(f'#let {var} = "{escaped}"\n')
 
     # Write main.typ
     with open(main_path, "w", encoding="utf-8") as f:
-        f.write(f'#import "{vars_path.name}": *\n\n')
-        if input_path.suffix == ".md":
+        f.write(f'#import "{vars_path.name}": *\n')
+        f.write(f'// #import "{fake_path.name}": *\n')
+        f.write('// Uncomment the above line to show the document with real PII instead of fake data.\n\n')
+        if input_path.suffix in [".md", ".pdf"]:
             f.write(md_to_typst(anonymized_text))
         else:
             f.write(anonymized_text)
