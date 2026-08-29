@@ -1,0 +1,48 @@
+*pyc
+.pytest_cache
+__pycache__
+.grkrc
+*txt
+*.log
+*.lock
+!uv.lock
+.aider*
+
+notes/
+
+# build/test artifacts
+.coverage
+htmlcov/
+tags
+.grk_cache.json
+v1.json
+
+# Fumadocs / Next (local docs-site)
+node_modules/
+.next/
+.source/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# local-dev (this clone; not published)
+# Makefile: make docs / test / sync / fmt
+# docs/: Fumadocs MDX
+# docs-site/: Next app
+# scripts/: docs helpers
+/Makefile
+docs/
+docs-site/
+scripts/
+/AGENTS.md
+/CLAUDE.md
+.vscode/
+clean.sh
+specs/
+examples/
+.foldignore
+.python-version
+CHANGELOG.md
+admin.sh
+design_brief.typ
+skills/
