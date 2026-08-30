@@ -14,9 +14,9 @@
 - Output verification that re-scans for identifiers that survived replacement
 - Faker identities, or irreversible `[REDACTED]`
 
-Automated detection is not a guarantee of anonymity. Review before sharing.
+## GUI
 
-License: [MIT](LICENSE). CLI: `did -h`. Agents: [`SKILL.md`](SKILL.md).
+<img src="gui.png" alt="DID desktop review: project tree, pseudonymized preview, and entity table" width="800">
 
 ## Install
 
@@ -34,3 +34,11 @@ did gui
 uv sync --extra models
 HEADLESS=1 QT_QPA_PLATFORM=offscreen uv run pytest -v
 ```
+
+## Disclaimer
+
+Automated detection is not a guarantee of anonymity. Review before sharing.
+
+## License
+
+License: [MIT](LICENSE). CLI: `did -h`. Agents: [`SKILL.md`](SKILL.md).

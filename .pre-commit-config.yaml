@@ -5,3 +5,19 @@ repos:
       - id: ruff-check
         args: [--fix]
       - id: ruff-format
+  - repo: local
+    hooks:
+      - id: gui-screenshot
+        name: regenerate GUI screenshot
+        language: system
+        pass_filenames: false
+        files: ^src/gdid/gui/
+        entry: >-
+          bash -c 'set -euo pipefail;
+          script=docs/scripts/capture_gui.py;
+          if [[ ! -f $script ]]; then
+            echo "skip: $script not present";
+            exit 0;
+          fi;
+          QT_QPA_PLATFORM=xcb xvfb-run -a -s "-screen 0 1700x1050x24"
+          uv run python "$script"'

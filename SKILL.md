@@ -3,7 +3,8 @@ name: did
 description: >
   Use when stripping PII from legal, medical, HR, or other personal-data
   documents; when a local agent holds source files a non-local or cloud
-  model must not see; when preparing a de-identified or token-only handoff;
+  model must not see; when a non-local or cloud model is asked to de-id or
+  read that source; when preparing a de-identified or token-only handoff;
   or when installing or running `did` on a real case. Triggers: anonymise,
   de-id, pseudonymise, PII removal, "keep names out", `#(P1V1)`, LLM
   handoff, did-anon.
@@ -11,7 +12,9 @@ description: >
 
 # did
 
-PII removal. Local agent holds the source. Remote AI gets only the stripped handoff.
+Aimed at **local** models. PII removal: local agent holds the source; remote AI gets only the stripped handoff.
+
+If this session is not local (inference, tools, logs, or storage leave the device): **track back**. A local model runs DID and delivers the pseudonymized / token-only set. Resume on that artifact only.
 
 `#(P1V1)` / `#(P1V2)` = same person, two forms. `#(E1V1)` email · `#(A1V1)` address · `#(DOC1V1)` title. Reason from tokens.
 
@@ -22,8 +25,6 @@ Discover flags from the installed CLI: `did -h`, `did <path> -h`, `did -j`. Afte
 1. **Local** — full docs. Run DID. Review entities. Over-removal wins.
 2. **Handoff** — token-only artifact (`anon/` or GUI Markdown/JSON/ZIP). Leftover names, re-identifying context.
 3. **Remote** — if needed, that artifact only.
-
-**Local** = inference, tools, logs, storage on-device. Else: install and synthetic only; wait for a handoff.
 
 Done when that artifact is inspected and any remote recipient has only it.
 
