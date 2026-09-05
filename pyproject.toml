@@ -1,6 +1,6 @@
 [project]
 name = "did"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local-first CLI and GUI for reviewing and pseudonymizing documents"
 authors = [
     { name = "evidlabel", email = "210122431+evidlabel@users.noreply.github.com" },
@@ -32,13 +32,19 @@ dependencies = [
     "numpy>=2.3",  # Added for vectorization
     "treeparse>=0.2.8",
     "pypdf>=6,<7",
-    "PySide6",
     "faker>=37,<38",
     "python-docx>=1.2,<2",
 ]
 
 [project.optional-dependencies]
+gui = ["PySide6"]
 models = [
+    "en-core-web-md",
+    "da-core-news-sm",
+    "da-core-news-lg",
+]
+all = [
+    "PySide6",
     "en-core-web-md",
     "da-core-news-sm",
     "da-core-news-lg",

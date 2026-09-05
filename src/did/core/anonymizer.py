@@ -19,7 +19,10 @@ SPACY_MODELS = {
     "thorough": {"da": "da_core_news_lg", "en": "en_core_web_md"},
     "balanced": {"da": "da_core_news_sm", "en": "en_core_web_md"},
 }
-MODELS_INSTALL_HINT = "uv sync --extra models"
+MODELS_INSTALL_HINT = (
+    "uv sync --extra models  "
+    'or  uv tool install "did[models] @ git+https://github.com/evidlabel/did.git"'
+)
 
 
 def missing_spacy_models(detection_profile="thorough"):

@@ -194,7 +194,7 @@ wheels = [
 
 [[package]]
 name = "did"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "bibtexparser" },
@@ -203,7 +203,6 @@ dependencies = [
     { name = "presidio-analyzer" },
     { name = "pydantic" },
     { name = "pypdf" },
-    { name = "pyside6" },
     { name = "python-docx" },
     { name = "rapidfuzz" },
     { name = "rich" },
@@ -213,6 +212,15 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+all = [
+    { name = "da-core-news-lg" },
+    { name = "da-core-news-sm" },
+    { name = "en-core-web-md" },
+    { name = "pyside6" },
+]
+gui = [
+    { name = "pyside6" },
+]
 models = [
     { name = "da-core-news-lg" },
     { name = "da-core-news-sm" },
@@ -233,15 +241,19 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "bibtexparser" },
+    { name = "da-core-news-lg", marker = "extra == 'all'", url = "https://github.com/explosion/spacy-models/releases/download/da_core_news_lg-3.8.0/da_core_news_lg-3.8.0-py3-none-any.whl" },
     { name = "da-core-news-lg", marker = "extra == 'models'", url = "https://github.com/explosion/spacy-models/releases/download/da_core_news_lg-3.8.0/da_core_news_lg-3.8.0-py3-none-any.whl" },
+    { name = "da-core-news-sm", marker = "extra == 'all'", url = "https://github.com/explosion/spacy-models/releases/download/da_core_news_sm-3.8.0/da_core_news_sm-3.8.0-py3-none-any.whl" },
     { name = "da-core-news-sm", marker = "extra == 'models'", url = "https://github.com/explosion/spacy-models/releases/download/da_core_news_sm-3.8.0/da_core_news_sm-3.8.0-py3-none-any.whl" },
+    { name = "en-core-web-md", marker = "extra == 'all'", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0/en_core_web_md-3.8.0-py3-none-any.whl" },
     { name = "en-core-web-md", marker = "extra == 'models'", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0/en_core_web_md-3.8.0-py3-none-any.whl" },
     { name = "faker", specifier = ">=37,<38" },
     { name = "numpy", specifier = ">=2.3" },
     { name = "presidio-analyzer", specifier = ">=2.2.0" },
     { name = "pydantic", specifier = ">=2.11,<3" },
     { name = "pypdf", specifier = ">=6,<7" },
-    { name = "pyside6" },
+    { name = "pyside6", marker = "extra == 'all'" },
+    { name = "pyside6", marker = "extra == 'gui'" },
     { name = "python-docx", specifier = ">=1.2,<2" },
     { name = "rapidfuzz", specifier = ">=3.10.0,<4" },
     { name = "rich", specifier = ">=13.3.0,<14" },
@@ -249,7 +261,7 @@ requires-dist = [
     { name = "spacy", specifier = ">=3.8.2,<4" },
     { name = "treeparse", specifier = ">=0.2.8" },
 ]
-provides-extras = ["models"]
+provides-extras = ["gui", "models", "all"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -27,7 +27,7 @@ jobs:
       - name: Set up Python 3.12
         run: uv python install 3.12
       - name: Install dependencies
-        run: uv sync --extra models --locked
+        run: uv sync --all-extras --locked
       - name: Run tests
         env:
           HEADLESS: "1"

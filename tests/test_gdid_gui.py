@@ -8,6 +8,8 @@ The slow spaCy-backed Anonymizer is replaced by a fake factory throughout.
 import os
 
 import pytest
+
+pytest.importorskip("PySide6")
 from PySide6.QtCore import Qt
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

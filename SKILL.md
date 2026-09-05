@@ -35,7 +35,7 @@ uv tool install 'did[models] @ git+https://github.com/evidlabel/did.git'
 did batch ./case_files -o ./work
 ```
 
-https://github.com/evidlabel/did · `did gui` for human review.
+https://github.com/evidlabel/did · `did gui` for human review (extra `did[gui]`, or `did[all]`).
 
 ```
 <out>/

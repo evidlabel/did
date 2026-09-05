@@ -20,18 +20,19 @@
 
 ## Install
 
-Python 3.12+, [uv](https://docs.astral.sh/uv/). Language models come from the spaCy releases pinned by this repo:
+Python 3.12+, [uv](https://docs.astral.sh/uv/). Default is CLI only (no Qt). Language models and the GUI are extras:
 
 ```bash
-uv tool install 'did[models] @ git+https://github.com/evidlabel/did.git'
+uv tool install 'did[models] @ git+https://github.com/evidlabel/did.git'   # CLI + spaCy models
+uv tool install 'did[all] @ git+https://github.com/evidlabel/did.git'      # + Qt GUI
 did --help
-did gui
+did gui    # needs extra did[gui] (included in did[all])
 ```
 
 ## Development
 
 ```bash
-uv sync --extra models
+uv sync --all-extras
 HEADLESS=1 QT_QPA_PLATFORM=offscreen uv run pytest -v
 ```
 
