@@ -6,6 +6,7 @@ config is editable and re-applies live → **Save** writes Typst output. All rea
 work is delegated to :mod:`gdid.pipeline` via the workers in :mod:`gdid.gui.workers`.
 """
 
+import dataclasses
 import json
 import shutil
 import zipfile
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
+    QPushButton,
     QSplitter,
     QTabWidget,
     QToolBar,
@@ -43,10 +45,12 @@ from PySide6.QtWidgets import (
 from did import __version__
 from did.core import entity_types
 from did.core.anonymizer import Anonymizer
+from did.utils.file_utils import Reading
 
-from .. import pipeline
+from .. import detect_process, pipeline
 from ..project import (
     CANONICAL_PROJECT_FILENAME,
+    ENTITIES_FILENAME,
     PROJECT_SUFFIX,
     Project,
     ProjectError,
@@ -55,9 +59,11 @@ from ..project import (
     convert_legacy_project,
     create_project_workdir,
     delete_project_workdir,
+    draft_entities_path,
     finalize_version,
     list_versions,
     load_not_names,
+    save_draft_entities,
     save_not_names,
 )
 from ..project import load_project as read_project
@@ -75,22 +81,27 @@ from .entity_panel import (
     REVIEW_ENTITY_TYPES,
     ROLE_ENTITY_ID,
     ROLE_ENTITY_TYPE,
+    ROLE_TOKEN_INDEX,
     ROLE_VARIANT,
     ROLE_VARIANTS,
     EntityPanel,
+    KeysSourceBar,
 )
 from .preview import PreviewPanel, token_at_position
 from .project_tree import (
     ROLE_ACTIVE_PROJECT,
     ROLE_DOCUMENT_PATH,
+    ROLE_FILE_PATH,
     ROLE_PROJECT_KIND,
     ROLE_PROJECT_PATH,
     ROLE_VERSION_PATH,
     ProjectTreePanel,
+    keys_origin_label,
     version_document_files,
 )
+from .reveal import open_in_file_manager
 from .settings import AppSettings
-from .workers import AnonymizeWorker, ExtractWorker, PseudoWorker
+from .workers import AnonymizeWorker, ExtractWorker, PseudoWorker, TaskWorker
 
 # Re-export under prior private names so existing window code and tests keep
 # working without a noisy rename across the project-tree helpers.
@@ -98,6 +109,7 @@ _ROLE_ENTITY_ID = ROLE_ENTITY_ID
 _ROLE_VARIANT = ROLE_VARIANT
 _ROLE_ENTITY_TYPE = ROLE_ENTITY_TYPE
 _ROLE_VARIANTS = ROLE_VARIANTS
+_ROLE_TOKEN_INDEX = ROLE_TOKEN_INDEX
 _ROLE_PROJECT_KIND = ROLE_PROJECT_KIND
 _ROLE_PROJECT_PATH = ROLE_PROJECT_PATH
 _ROLE_VERSION_PATH = ROLE_VERSION_PATH
@@ -115,6 +127,10 @@ _LICENSE_URL = f"{_PROJECT_URL}/blob/main/LICENSE"
 _ENTITY_TYPES = tuple(entity.config_key for entity in entity_types.DETECTED_TYPES)
 
 
+def _identities(count):
+    return f"{count} identit{'y' if count == 1 else 'ies'}"
+
+
 class MainWindow(QMainWindow):
     """Main gdid window."""
 
@@ -125,9 +141,20 @@ class MainWindow(QMainWindow):
         self._project: Project | None = None
         self._dirty = False
         self._loading_project = False
-        self._apply_saved_config = False
+        # Review text to carry into the next detection pass (see _on_anonymized).
+        self._pending_review_yaml = None
+        # How the current draft keys came about: saved_review/merged/fresh/edited.
+        self._keys_origin = None
+        self._keys_saved_text = None
+        self._redetect_on_return = False
+        self._detection_status = None
+        self._force_review_merge = False
+        self._after_reapply = None
+        self._export_worker = None
         self._viewing_version = None
         self._draft_view_state = None
+        self._version_yaml_overrides = {}
+        self._version_snapshot_yaml = ""
         self._selected_file: Path | None = None
         self._tree_pressed_state = None
         self._pending_tree_navigation = None
@@ -139,7 +166,7 @@ class MainWindow(QMainWindow):
         self._suppress_context_menu_popup = False
 
         self._files: list[Path] = []
-        self._extracted: dict[Path, str] = {}
+        self._readings: dict[Path, Reading] = {}
         self._anonymized: dict[Path, str] = {}
         self._anonymizer = None
         self._yaml_text = ""
@@ -148,6 +175,9 @@ class MainWindow(QMainWindow):
         self._language = "da"
         self._detection_profile = "thorough"
         self._output_mode = "typst"
+        self._show_original = False
+        # Sources being read off the UI thread for a version's Original view.
+        self._original_loads: set[Path] = set()
         self._auto_version_pending = False
         self._verification = None
         self._verification_acknowledged = False
@@ -228,13 +258,14 @@ class MainWindow(QMainWindow):
             "Documents are processed automatically when added. Re-run detection "
             "after changing language or detection settings."
         )
-        self.anon_action.triggered.connect(self._on_anonymize)
+        self.anon_action.triggered.connect(self._on_redetect)
         tb.addAction(self.anon_action)
 
         self.save_button = QToolButton(self)
-        self.save_button.setText("Create version")
+        self.save_button.setText("Save output")
         self.save_button.setToolTip(
-            "Create an immutable pseudonymized version in this project’s workdir."
+            "Write the pseudonymized output for this project. It replaces the "
+            "previous output."
         )
         self.save_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         save_menu = QMenu(self.save_button)
@@ -242,6 +273,11 @@ class MainWindow(QMainWindow):
         self.save_multi_action.triggered.connect(lambda: self._on_save("multi"))
         self.save_single_action = save_menu.addAction("Single (combined)")
         self.save_single_action.triggered.connect(lambda: self._on_save("single"))
+        self.save_pdf_action = save_menu.addAction("PDFs (via Typst)")
+        self.save_pdf_action.setToolTip(
+            "One <name>_pseudo.pdf per document, rendered from Typst."
+        )
+        self.save_pdf_action.triggered.connect(lambda: self._on_save("pdf"))
         self.save_button.setMenu(save_menu)
         tb.addWidget(self.save_button)
 
@@ -279,6 +315,7 @@ class MainWindow(QMainWindow):
         self.lang_combo = QComboBox()
         self.lang_combo.addItem("Danish", "da")
         self.lang_combo.addItem("English", "en")
+        self.lang_combo.addItem("Swedish", "sv")
         self.lang_combo.setToolTip(
             "Language used to detect names, addresses, dates, and other entities."
         )
@@ -306,6 +343,14 @@ class MainWindow(QMainWindow):
         )
         self.output_combo.currentIndexChanged.connect(self._on_output_mode)
         tb.addWidget(self.output_combo)
+        self.original_button = QPushButton("Original")
+        self.original_button.setCheckable(True)
+        self.original_button.setToolTip(
+            "Show the unanonymized source text of the current document. "
+            "It contains personal data. LLM handoff still copies the pseudonymized text."
+        )
+        self.original_button.toggled.connect(self._on_show_original)
+        tb.addWidget(self.original_button)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -355,10 +400,17 @@ class MainWindow(QMainWindow):
         self.yaml_edit.setFont(_MONO)
         self.yaml_edit.setPlaceholderText("Detected entity config (YAML) — editable")
         self.yaml_edit.textChanged.connect(self._on_yaml_changed)
-        tabs = QTabWidget()
+        self.entity_tabs = tabs = QTabWidget()
         tabs.addTab(self.entity_panel, "Entity review")
         tabs.addTab(self.yaml_edit, "Advanced YAML")
-        entities_box = self._titled("Detected entities", tabs)
+        self.keys_bar = KeysSourceBar()
+        self.keys_bar.openFolderRequested.connect(self._reveal_path)
+        keys_box = QWidget()
+        keys_layout = QVBoxLayout(keys_box)
+        keys_layout.setContentsMargins(0, 0, 0, 0)
+        keys_layout.addWidget(self.keys_bar)
+        keys_layout.addWidget(tabs)
+        entities_box = self._titled("Detected entities", keys_box)
         entities_box.setMinimumWidth(460)
         splitter.addWidget(entities_box)
 
@@ -382,6 +434,11 @@ class MainWindow(QMainWindow):
         self._reapply_timer.setSingleShot(True)
         self._reapply_timer.setInterval(500)
         self._reapply_timer.timeout.connect(self._reapply_config)
+        # Debounce autosave of the draft keys file.
+        self._keys_save_timer = QTimer(self)
+        self._keys_save_timer.setSingleShot(True)
+        self._keys_save_timer.setInterval(500)
+        self._keys_save_timer.timeout.connect(self._autosave_keys)
 
     @staticmethod
     def _titled(title, widget):
@@ -396,7 +453,7 @@ class MainWindow(QMainWindow):
     # -------------------------------------------------------------- helpers ---
     def _refresh_actions(self):
         read_only = self._viewing_version is not None
-        self.anon_action.setEnabled(bool(self._extracted))
+        self.anon_action.setEnabled(bool(self._readings))
         self.save_button.setEnabled(bool(self._anonymized))
         self.llm_button.setEnabled(bool(self._anonymized))
         current_ready = self._current_file() in self._anonymized
@@ -407,6 +464,10 @@ class MainWindow(QMainWindow):
         self.rename_project_action.setEnabled(self._project is not None)
         self.meta_action.setEnabled(self._project is not None)
         self.remove_document_action.setEnabled(self._current_file() is not None)
+        current = self._current_file()
+        self.original_button.setEnabled(self._can_show_original(current))
+        if self._export_worker is not None:
+            self.save_button.setEnabled(False)
         if read_only:
             self.anon_action.setEnabled(False)
             self.save_button.setEnabled(False)
@@ -444,7 +505,7 @@ class MainWindow(QMainWindow):
             viewing_version=self._viewing_version,
             draft_view_state=self._draft_view_state,
             anonymized=self._anonymized,
-            extracted=self._extracted,
+            extracted=self._readings,
             source_digest_cache=self._source_digest_cache,
             remove_missing_recent=self._settings.remove_recent_project,
         )
@@ -475,7 +536,7 @@ class MainWindow(QMainWindow):
             else ""
         )
         if project_path != active_path and project_path:
-            if kind in {"version", "version_document"}:
+            if kind in {"version", "version_document", "version_keys"}:
                 self._pending_tree_navigation = (
                     Path(version_path),
                     Path(document_path) if document_path else None,
@@ -498,6 +559,17 @@ class MainWindow(QMainWindow):
             return
         if kind in {"meta", "meta_entry"}:
             self._on_meta()
+            return
+        if kind == "draft_keys":
+            if self._viewing_version is not None:
+                self._return_to_draft()
+            self.entity_tabs.setCurrentWidget(self.yaml_edit)
+            return
+        if kind == "version_keys" and version_path:
+            path = Path(version_path)
+            if self._viewing_version != path:
+                self._view_version(path)
+            self.entity_tabs.setCurrentWidget(self.yaml_edit)
             return
         if kind in {"draft", "draft_document"}:
             if self._viewing_version is not None:
@@ -544,87 +616,189 @@ class MainWindow(QMainWindow):
 
     def _on_project_tree_menu(self, pos):
         item = self.project_tree.itemAt(pos)
-        if item is None:
+        menu = self._project_tree_menu(item)
+        if menu is None:
             return
+        menu.exec(self.project_tree.viewport().mapToGlobal(pos))
+
+    def _project_tree_menu(self, item):
+        if item is None:
+            return None
+        menu = self._project_tree_menu_actions(item)
+        if menu is None:
+            return None
+        self._add_open_folder_action(menu, self._tree_item_folder(item))
+        return menu
+
+    def _project_tree_menu_actions(self, item):
         menu = QMenu(self)
         kind = item.data(0, ROLE_PROJECT_KIND)
         document_path = item.data(0, ROLE_DOCUMENT_PATH)
         if kind in {"draft_document", "version_document"}:
             f = Path(document_path) if document_path else None
             menu = self._copy_menu(f)
+            if f is not None:
+                view_original = menu.addAction("View original text")
+                version_path = item.data(0, ROLE_VERSION_PATH)
+                view_original.setEnabled(
+                    kind == "version_document"
+                    or (f in self._files and f in self._readings)
+                )
+                view_original.triggered.connect(
+                    lambda doc=f, item_kind=kind, version=version_path: (
+                        self._view_original_document(doc, item_kind, version)
+                    )
+                )
             if kind == "draft_document":
                 menu.addSeparator()
                 remove = menu.addAction("Remove document from project")
                 project_path = item.data(0, ROLE_PROJECT_PATH)
-                active_path = (
-                    str(self._project.project_file.resolve())
-                    if self._project is not None
-                    and self._project.project_file is not None
-                    else ""
-                )
-                remove.setEnabled(project_path == active_path)
+                remove.setEnabled(project_path == self._active_project_path())
                 remove.triggered.connect(
                     lambda: self._remove_tree_document(project_path, f)
                 )
-            menu.exec(self.project_tree.viewport().mapToGlobal(pos))
-            return
+            return menu
+        if kind in {"draft_keys", "version_keys"}:
+            file_path = item.data(0, ROLE_FILE_PATH)
+            show = menu.addAction("Show keys (Advanced YAML)")
+            show.triggered.connect(lambda: self._on_project_tree_item_clicked(item, 0))
+            copy_path = menu.addAction("Copy path")
+            copy_path.setEnabled(bool(file_path))
+            copy_path.triggered.connect(lambda: self._copy_path_to_clipboard(file_path))
+            return menu
         if kind == "version":
             path = Path(item.data(0, ROLE_VERSION_PATH))
-            reveal = menu.addAction("Reveal version folder")
-            reveal.triggered.connect(lambda: self._reveal_path(path))
-            copy = menu.addAction("Copy version to…")
+            copy = menu.addAction("Copy output to…")
             copy.triggered.connect(lambda: self._copy_version(path))
-            menu.exec(self.project_tree.viewport().mapToGlobal(pos))
-            return
+            return menu
         if kind == "draft":
             project_path = item.data(0, ROLE_PROJECT_PATH)
             add_documents = menu.addAction("Add documents…")
             add_documents.triggered.connect(
                 lambda: self._add_documents_to_tree_project(project_path)
             )
-            menu.exec(self.project_tree.viewport().mapToGlobal(pos))
-            return
+            return menu
         if kind in {"meta", "meta_entry"}:
             project_path = item.data(0, ROLE_PROJECT_PATH)
             edit_meta = menu.addAction("Edit project meta…")
             edit_meta.triggered.connect(
                 lambda: self._edit_tree_project_meta(project_path)
             )
-            menu.exec(self.project_tree.viewport().mapToGlobal(pos))
-            return
-        if kind == "version_document":
-            return
-        if item.data(0, ROLE_ACTIVE_PROJECT):
-            project_path = item.data(0, ROLE_PROJECT_PATH)
+            return menu
+        if kind in {"excluded_group", "excluded_detection"}:
+            return menu
+        if item.data(0, ROLE_ACTIVE_PROJECT) or kind == "project":
+            project_path = item.data(0, ROLE_PROJECT_PATH) or ""
             add_documents = menu.addAction("Add documents…")
             add_documents.triggered.connect(
                 lambda: self._add_documents_to_tree_project(project_path)
             )
             menu.addSeparator()
-            rename = menu.addAction("Rename project…")
-            rename.triggered.connect(self._on_rename_project)
-            menu.addSeparator()
-            delete = menu.addAction("Delete project…")
-            delete.triggered.connect(lambda: self._delete_project(project_path))
-            menu.exec(self.project_tree.viewport().mapToGlobal(pos))
-            return
+            if item.data(0, ROLE_ACTIVE_PROJECT):
+                rename = menu.addAction("Rename project…")
+                rename.triggered.connect(self._on_rename_project)
+                menu.addSeparator()
+            self._add_remove_project_action(menu, project_path)
+            if project_path:
+                delete = menu.addAction("Delete project…")
+                delete.triggered.connect(lambda: self._delete_project(project_path))
+            return menu
         path = item.data(0, ROLE_PROJECT_PATH)
         if not path:
-            return
+            return None
         add_documents = menu.addAction("Add documents…")
         add_documents.triggered.connect(
             lambda: self._add_documents_to_tree_project(path)
         )
         menu.addSeparator()
-        remove = menu.addAction("Remove from recent projects")
-        remove.triggered.connect(lambda: self._remove_recent_project(path))
+        self._add_remove_project_action(menu, path)
         delete = menu.addAction("Delete project…")
         delete.triggered.connect(lambda: self._delete_project(path))
-        menu.exec(self.project_tree.viewport().mapToGlobal(pos))
+        return menu
+
+    @staticmethod
+    def _tree_item_folder(item):
+        """The directory "Open in file manager" shows for a tree item, or None."""
+        kind = item.data(0, ROLE_PROJECT_KIND)
+        project_path = item.data(0, ROLE_PROJECT_PATH)
+        workdir = Path(project_path).parent if project_path else None
+        if kind in {"draft_document", "version_document"}:
+            document = item.data(0, ROLE_DOCUMENT_PATH)
+            return Path(document).parent if document else None
+        if kind in {"draft_keys", "version_keys"}:
+            file_path = item.data(0, ROLE_FILE_PATH)
+            return Path(file_path).parent if file_path else None
+        if kind == "version":
+            version = item.data(0, ROLE_VERSION_PATH)
+            return Path(version) if version else None
+        if kind in {"draft", "excluded_group", "excluded_detection"}:
+            return workdir / "draft" if workdir is not None else None
+        return workdir
+
+    def _add_open_folder_action(self, menu, folder):
+        if menu.actions():
+            menu.addSeparator()
+        action = menu.addAction("Open in file manager")
+        action.setEnabled(folder is not None and Path(folder).is_dir())
+        if folder is not None:
+            action.setToolTip(str(folder))
+            action.triggered.connect(lambda: self._reveal_path(Path(folder)))
+        return action
+
+    def _copy_path_to_clipboard(self, path):
+        if not path:
+            return
+        QApplication.clipboard().setText(str(path))
+        self._set_status(f"Copied path {path}.")
+
+    def _active_project_path(self):
+        return (
+            str(self._project.project_file.resolve())
+            if self._project is not None and self._project.project_file is not None
+            else ""
+        )
+
+    def _add_remove_project_action(self, menu, project_path):
+        remove = menu.addAction("Remove project")
+        remove.triggered.connect(lambda: self._remove_project_from_tree(project_path))
+        return remove
 
     def _remove_recent_project(self, path):
         self._settings.remove_recent_project(path)
         self._refresh_project_list()
+
+    def _remove_project_from_tree(self, path):
+        """Drop a project from the sidebar. The workdir stays on disk."""
+        path = str(path or "")
+        active = self._project is not None and (
+            (not path and self._project.project_file is None)
+            or (
+                path
+                and self._project.project_file is not None
+                and str(self._project.project_file.resolve()) == path
+            )
+        )
+        if active:
+            name = self._project.name
+            if not self._confirm_discard():
+                return False
+            if path:
+                self._settings.remove_recent_project(path)
+            self._reset_session()
+            self._project = None
+            self._set_dirty(False)
+            self._refresh_actions()
+        elif path:
+            self._settings.remove_recent_project(path)
+            try:
+                name = read_project(path).name
+            except ProjectError:
+                name = Path(path).name.removesuffix(PROJECT_SUFFIX)
+        else:
+            return False
+        self._refresh_project_list()
+        self._set_status(f"Removed project ‘{name}’ from the list.")
+        return True
 
     def _delete_project(self, path, *, confirmed=False):
         """Permanently remove a project's dedicated workdir."""
@@ -640,7 +814,7 @@ class MainWindow(QMainWindow):
                 self,
                 "Could not delete project",
                 "Only self-contained DID project workdirs can be deleted here. "
-                "Use ‘Remove from recent projects’ for legacy project files.",
+                "Use ‘Remove project’ to drop a legacy project file from the list.",
             )
             return False
         if not confirmed and not self._confirm_project_deletion(project.name, workdir):
@@ -716,6 +890,10 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _reveal_path(path):
+        # A desktop can point inode/directory at the wrong app (e.g. git-cola);
+        # prefer a real file manager and only fall back to the desktop opener.
+        if open_in_file_manager(path):
+            return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     @staticmethod
@@ -734,7 +912,7 @@ class MainWindow(QMainWindow):
 
     def _copy_version(self, path):
         parent = QFileDialog.getExistingDirectory(
-            self, "Copy version to directory", str(Path.home())
+            self, "Copy output to directory", str(Path.home())
         )
         if not parent:
             return
@@ -754,6 +932,7 @@ class MainWindow(QMainWindow):
     def _set_dirty(self, dirty=True):
         self._dirty = dirty
         self._update_window_title()
+        self._update_keys_bar()
 
     def _ensure_project(self):
         if self._project is None:
@@ -761,11 +940,34 @@ class MainWindow(QMainWindow):
             self._set_dirty(True)
         return self._project
 
+    def _texts(self) -> dict[Path, str]:
+        """The current readings, as the strings detection and preview use."""
+        return {path: reading.text for path, reading in self._readings.items()}
+
+    def _readings_publishable(self) -> bool:
+        bad = [
+            reading.path.name
+            for reading in self._readings.values()
+            if not reading.readable
+        ]
+        if not bad:
+            return True
+        self._set_status(f"Not publishing. No readable text for {', '.join(bad)}.")
+        return False
+
+    def _toolbar_language(self) -> str:
+        """Language currently shown in the toolbar."""
+        if hasattr(self, "lang_combo"):
+            selected = self.lang_combo.currentData()
+            if selected:
+                self._language = selected
+        return self._language
+
     def _sync_project(self):
         if self._project is None:
             return
         self._project.source_paths = list(self._files)
-        self._project.language = self._language
+        self._project.language = self._toolbar_language()
         self._project.detection_profile = self._detection_profile
         self._project.entity_config_yaml = self.yaml_edit.toPlainText()
         self._project.preview_format = self._output_mode
@@ -860,18 +1062,30 @@ class MainWindow(QMainWindow):
         return menu
 
     def _add_entity_variant(self, row, variant=None):
-        item = self.entity_table.item(row, 2)
+        item = self.entity_table.item(row, 2) if row >= 0 else None
         if item is None:
+            self._set_status("Select an identity row before adding a variant.")
             return
         entity_type = item.data(_ROLE_ENTITY_TYPE)
+        if not entity_type:
+            type_item = self.entity_table.item(row, 0)
+            entity_type = type_item.text() if type_item is not None else None
         entity_id = item.data(_ROLE_ENTITY_ID)
-        if not entity_type or not entity_id:
+        position = item.data(_ROLE_TOKEN_INDEX)
+        if not entity_type or not entity_id and not position:
+            QMessageBox.warning(
+                self,
+                "Could not add variant",
+                "This row does not identify a stored entity. Re-run detection "
+                "or create the identity from a selection first.",
+            )
             return
+        label = entity_id or f"{entity_type} #{position}"
         if variant is None:
             variant, accepted = QInputDialog.getText(
                 self,
                 "Add identity variant",
-                f"Variant for {entity_type} · {entity_id}:",
+                f"Variant for {entity_type} · {label}:",
             )
             if not accepted:
                 return
@@ -879,25 +1093,26 @@ class MainWindow(QMainWindow):
         if not variant:
             return
         try:
-            changed_yaml = pipeline.add_entity_variant(
-                self.yaml_edit.toPlainText(), entity_type, entity_id, variant
-            )
+            if entity_id:
+                changed_yaml = pipeline.add_entity_variant(
+                    self.yaml_edit.toPlainText(), entity_type, entity_id, variant
+                )
+            else:
+                changed_yaml = pipeline.add_entity_variant_at(
+                    self.yaml_edit.toPlainText(), entity_type, position, variant
+                )
         except ValueError as exc:
             QMessageBox.warning(self, "Could not add variant", str(exc))
             return
-        self.yaml_edit.setPlainText(changed_yaml)
-        project = self._ensure_project()
-        project.entity_config_yaml = changed_yaml
-        if project.project_file is not None:
-            self._sync_project()
-            try:
-                write_project(project)
-            except ProjectError as exc:
-                QMessageBox.warning(
-                    self, "Variant added but draft could not be saved", str(exc)
-                )
-                return
-        self._set_status(f"Added variant “{variant}” to {entity_id} · draft saved.")
+        if changed_yaml == self.yaml_edit.toPlainText():
+            self._set_status(
+                f"“{variant}” is already a variant of {label} — other "
+                "capitalizations (e.g. ALL CAPS) are replaced automatically."
+            )
+            return
+        self._apply_manual_entity_yaml(
+            changed_yaml, f"Added variant “{variant}” to {label}."
+        )
 
     def _selected_entity_rows(self):
         return self.entity_panel.selected_rows()
@@ -922,22 +1137,10 @@ class MainWindow(QMainWindow):
         except ValueError as exc:
             QMessageBox.warning(self, "Could not change entity type", str(exc))
             return
-        self.yaml_edit.setPlainText(changed_yaml)
-        project = self._ensure_project()
-        project.entity_config_yaml = changed_yaml
-        if project.project_file is not None:
-            self._sync_project()
-            try:
-                write_project(project)
-            except ProjectError as exc:
-                QMessageBox.warning(
-                    self, "Entity changed but draft could not be saved", str(exc)
-                )
-                return
         count = len(entity_ids)
-        self._set_status(
-            f"Changed {count} identit{'y' if count == 1 else 'ies'} "
-            f"to {target_type} · draft saved."
+        self._apply_manual_entity_yaml(
+            changed_yaml,
+            f"Changed {count} identit{'y' if count == 1 else 'ies'} to {target_type}.",
         )
 
     def _mark_not_name(self, row):
@@ -978,23 +1181,14 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Could not exclude name", str(exc))
             return
         self.yaml_edit.setPlainText(filtered_yaml)
-        self._project.entity_config_yaml = filtered_yaml
-        try:
-            write_project(self._project)
-        except ProjectError as exc:
-            QMessageBox.warning(
-                self,
-                "Exclusions saved but draft could not be updated",
-                str(exc),
-            )
-            self._set_dirty(True)
+        if self._save_keys_now() is None:
             return
-        self._set_dirty(False)
         self._refresh_project_tree()
         identity_count = len(identity_ids)
         self._set_status(
             f"Marked {identity_count} identit{'y' if identity_count == 1 else 'ies'} "
-            f"({len(variants)} variant(s)) as ‘Do not pseudonymize’ · saved to {path.name}."
+            f"({len(variants)} variant(s)) as ‘Do not pseudonymize’ · "
+            f"saved to draft/{path.name} and draft/{ENTITIES_FILENAME}."
         )
 
     def _merge_entity_rows(self, source_row, target_row):
@@ -1021,9 +1215,8 @@ class MainWindow(QMainWindow):
         except ValueError as exc:
             QMessageBox.warning(self, "Could not merge identities", str(exc))
             return
-        self.yaml_edit.setPlainText(merged_yaml)
         moved = f"variant “{variant}”" if variant else f"identity {source_id}"
-        self._set_status(f"Merged {moved} into {target_id}.")
+        self._apply_manual_entity_yaml(merged_yaml, f"Merged {moved} into {target_id}.")
 
     def _filter_entities(self, query=None):
         self.entity_panel.filter_entities(query)
@@ -1188,10 +1381,11 @@ class MainWindow(QMainWindow):
             self._set_status(NO_DOCUMENTS_STATUS)
             return
         self._advance_session_generation()
+        self._stash_review()
         self._files = files
         if self._selected_file not in files:
             self._selected_file = files[0]
-        self._extracted = {}
+        self._readings = {}
         self._anonymized = {}
         self._anonymizer = None
         self._yaml_text = ""
@@ -1211,7 +1405,7 @@ class MainWindow(QMainWindow):
             return
         old_index = self._files.index(selected)
         self._files = [path for path in self._files if path != selected]
-        self._extracted.pop(selected, None)
+        self._readings.pop(selected, None)
         self._anonymized.pop(selected, None)
         if self._project is not None:
             self._project.source_paths = [
@@ -1243,10 +1437,10 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _on_extracted(self, extracted):
-        self._extracted = extracted
+        self._readings = extracted
         self._set_busy(False)
         self._set_status(
-            f"{len(self._extracted)} document(s) extracted — detecting entities…"
+            f"{len(self._readings)} document(s) extracted — detecting entities…"
         )
         self._refresh_file_list()
         self._refresh_actions()
@@ -1263,101 +1457,157 @@ class MainWindow(QMainWindow):
         except (ProjectError, ValueError):
             return []
 
+    def _stash_review(self):
+        """Remember the current review so the next detection pass keeps it."""
+        if self._pending_review_yaml is None and self._viewing_version is None:
+            self._pending_review_yaml = self.yaml_edit.toPlainText()
+
+    def _on_redetect(self, _checked=False):
+        """Detect again on purpose: new detections are merged into the review.
+
+        Unlike reopening a project, the review is not reused as-is even when
+        the documents are unchanged — the point is to pick up what the new
+        language or profile finds.
+        """
+        self._force_review_merge = True
+        self._on_anonymize()
+
     def _on_anonymize(self):
-        if not self._extracted:
+        if not self._readings:
             return
+        self._stash_review()
+        language = self._toolbar_language()
+        if self._project is not None:
+            self._project.language = language
         self._advance_session_generation()
         self._set_busy(True, "Detecting entities…")
+        if self._factory is Anonymizer:
+            # Start the child here, on the GUI thread: forking a Qt process
+            # from inside the worker thread can deadlock.
+            try:
+                detect_process.ensure_started()
+            except Exception as exc:
+                self._on_worker_error(f"Could not start detection: {exc}")
+                return
         worker = AnonymizeWorker(
-            self._extracted,
-            self._language,
+            self._texts(),
+            language,
             detection_profile=self._detection_profile,
             anonymizer_factory=self._factory,
             not_names=self._current_not_names(),
+        )
+        generation = self._session_generation
+        worker.status.connect(
+            lambda message: self._run_if_current(generation, self._set_status, message)
         )
         self._connect_worker(worker, self._on_anonymized)
         self._track(worker)
         worker.start()
 
     def _on_anonymized(self, anonymizer, yaml_str, anonymized, report=None):
+        """Settle which keys this detection pass uses, then pseudonymize with them.
+
+        A review never silently disappears: when it was built from exactly
+        these documents it is reused as-is; otherwise it is merged with the new
+        detections (reviewed identities kept, new ones appended).
+        """
+        yaml_str = pipeline.drop_fragment_organizations(yaml_str)
+        yaml_str = pipeline.stamp_reading(
+            yaml_str, pipeline.readings_digest(self._readings)
+        )
+        review = self._pending_review_yaml or ""
+        self._pending_review_yaml = None
+        force_merge = self._force_review_merge
+        self._force_review_merge = False
         effective_yaml = yaml_str
-        reapply = False
-        if self._apply_saved_config and self._project is not None:
-            effective_yaml = self._project.entity_config_yaml
-            reapply = True
-        self._apply_saved_config = False
+        origin = "fresh"
+        status = f"Fresh detection · {pipeline.count_identities(yaml_str)} identities."
+        if not force_merge and pipeline.review_matches_readings(review, self._readings):
+            effective_yaml = pipeline.drop_fragment_organizations(review)
+            origin = "saved_review"
+            status = "Applied the saved review (documents unchanged)."
+        elif pipeline.count_identities(review):
+            try:
+                effective_yaml, kept, added = pipeline.merge_review(review, yaml_str)
+            except ValueError:
+                status = (
+                    "The previous review was not valid YAML, so entities were "
+                    "detected afresh."
+                )
+            else:
+                origin = "merged"
+                status = f"Merged review: kept {kept} reviewed, added {added} new."
         if self._project is not None and self._project.project_file is not None:
             try:
                 exclusions = load_not_names(self._project)
-                filtered_yaml = pipeline.exclude_not_names(effective_yaml, exclusions)
+                effective_yaml = pipeline.exclude_not_names(effective_yaml, exclusions)
             except (ProjectError, ValueError) as exc:
                 self._on_worker_error(str(exc))
                 return
-            reapply = reapply or filtered_yaml != effective_yaml
-            effective_yaml = filtered_yaml
-        if reapply:
-            self._anonymizer = anonymizer
-            self._yaml_text = effective_yaml
-            self.yaml_edit.blockSignals(True)
-            self.yaml_edit.setPlainText(effective_yaml)
-            self.yaml_edit.blockSignals(False)
-            self._refresh_entity_table()
-            if self._project is not None:
-                self._project.entity_config_yaml = effective_yaml
+        self._anonymizer = anonymizer
+        self._keys_origin = origin
+        self._detection_status = status
+        self.yaml_edit.blockSignals(True)
+        self.yaml_edit.setPlainText(effective_yaml)
+        self.yaml_edit.blockSignals(False)
+        self._refresh_entity_table()
+        self._save_keys_now(effective_yaml)
+        if effective_yaml != yaml_str:
             worker = PseudoWorker(
                 anonymizer,
                 effective_yaml,
-                self._extracted,
+                self._texts(),
                 not_names=self._current_not_names(),
             )
             self._connect_worker(worker, self._on_reapplied)
             self._track(worker)
             worker.start()
             return
-        self._anonymizer = anonymizer
         self._yaml_text = yaml_str
         self._anonymized = anonymized
         self._set_verification(report)
-        self.yaml_edit.blockSignals(True)
-        self.yaml_edit.setPlainText(yaml_str)
-        self.yaml_edit.blockSignals(False)
         self._set_busy(False)
-        n_entities = yaml_str.count("- id:") if yaml_str else 0
         self._set_status(
             self._verification_status(
-                f"{len(self._files)} document(s) · ~{n_entities} entities · "
-                "ready to save."
+                f"{status} {len(self._files)} document(s) · ready to save."
             )
         )
         self._refresh_file_list()
         self._refresh_actions()
         self._show_current_preview()
         self._set_preview_state("PSEUDONYMIZED")
-        self._refresh_entity_table()
-        if self._project is not None:
-            self._project.entity_config_yaml = yaml_str
-            self._set_dirty(True)
         self._create_pending_import_version()
         self._finish_pending_tree_navigation()
 
     def _on_yaml_changed(self):
         valid = self._refresh_entity_table()
-        if not self._loading_project and self._project is not None:
+        if (
+            not self._loading_project
+            and self._project is not None
+            and self._viewing_version is None
+        ):
             self._project.entity_config_yaml = self.yaml_edit.toPlainText()
-            self._set_dirty(True)
+            self._keys_origin = "edited"
+            # Keys autosave to draft/entities.yaml; only an unsaved project
+            # has anything left to lose.
+            if self._keys_path() is None:
+                self._set_dirty(True)
+            else:
+                self._keys_save_timer.start()
+        self._update_keys_bar()
         # Live re-apply only makes sense once we have an anonymizer.
         if self._anonymizer is not None and valid:
             self._reapply_timer.start()
 
     def _reapply_config(self):
-        if self._anonymizer is None or not self._extracted:
+        if self._anonymizer is None or not self._readings:
             return
         self._advance_session_generation()
         yaml_text = self.yaml_edit.toPlainText()
         worker = PseudoWorker(
             self._anonymizer,
             yaml_text,
-            self._extracted,
+            self._texts(),
             not_names=self._current_not_names(),
         )
         self._connect_worker(worker, self._on_reapplied)
@@ -1374,13 +1624,142 @@ class MainWindow(QMainWindow):
         self._show_current_preview()
         self._set_preview_state("PSEUDONYMIZED")
         self._refresh_entity_table()
-        self._set_status(self._verification_status("Config re-applied."))
+        status = getattr(self, "_detection_status", None) or "Keys re-applied."
+        self._detection_status = None
+        self._set_status(self._verification_status(status))
+        continuation, self._after_reapply = self._after_reapply, None
         self._create_pending_import_version()
         self._finish_pending_tree_navigation()
+        if continuation is not None:
+            continuation()
+
+    def _ensure_fresh_then(self, continuation):
+        """True when the preview reflects the current keys; else refresh first.
+
+        A pending debounce or an in-flight worker would otherwise leave the
+        reviewer confirming output made from older keys than the ones exported.
+        The re-apply runs off the UI thread and *continuation* resumes the
+        export once it lands.
+        """
+        if (
+            self._viewing_version is not None
+            or self._anonymizer is None
+            or not self._readings
+        ):
+            return True
+        pending = self._reapply_timer.isActive() or (
+            self._yaml_text != self.yaml_edit.toPlainText()
+        )
+        if not pending:
+            return True
+        yaml_text = self.yaml_edit.toPlainText()
+        try:
+            pipeline.read_keys(yaml_text)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Keys are not valid", str(exc))
+            return False
+        self._reapply_timer.stop()
+        self._after_reapply = continuation
+        self._set_busy(True, "Applying the latest keys before export…")
+        self._reapply_config()
+        return False
+
+    def _start_version_export(self, *, label, mode, trigger, failure_title):
+        """Write the project output off the UI thread; the window stays responsive."""
+        if self._export_worker is not None:
+            self._set_status("The output is already being written…")
+            return False
+        project = self._project
+        project.export_mode = mode
+        project.export_destination = project.workdir / "versions"
+        self._sync_project()
+        try:
+            write_project(project)
+            stage = begin_version(project, label)
+        except ProjectError as exc:
+            QMessageBox.warning(self, failure_title, str(exc))
+            return False
+        files = [path for path in self._files if path in self._anonymized]
+        yaml_text = self.yaml_edit.toPlainText()
+        texts = self._texts()
+        anonymizer = self._anonymizer
+        # finalize_version reads the project; hand the thread its own snapshot.
+        snapshot = dataclasses.replace(
+            project,
+            source_paths=list(project.source_paths),
+            metadata=dict(project.metadata),
+        )
+        processing = {
+            "language": self._language,
+            "detection_profile": self._detection_profile,
+            "trigger": trigger,
+            "verification": self._verification_record(),
+        }
+        export = {"format": project.export_format, "mode": mode}
+        keys = self._keys_manifest_record(yaml_text)
+
+        def task():
+            pipeline.save_version_outputs(
+                files, anonymizer, yaml_text, mode, stage.path, source_texts=texts
+            )
+            return finalize_version(
+                snapshot,
+                stage,
+                processing=processing,
+                export=export,
+                app_version=__version__,
+                keys=keys,
+            )
+
+        worker = TaskWorker(task)
+        self._export_worker = worker
+
+        def done(version):
+            self._export_worker = None
+            self._set_busy(False)
+            self._set_preview_state(self._preview_state_for_current())
+            self._set_dirty(False)
+            self._refresh_project_list()
+            self._refresh_actions()
+            self._set_status(f"Wrote the output · {len(files)} document(s).")
+
+        def failed(message):
+            self._export_worker = None
+            abort_version(stage)
+            self._set_busy(False)
+            self._set_preview_state(self._preview_state_for_current())
+            self._refresh_actions()
+            QMessageBox.warning(self, failure_title, message)
+
+        worker.finished.connect(done)
+        worker.error.connect(failed)
+        self._track(worker)
+        self._set_busy(True, f"Writing the output ({len(files)} document(s))…")
+        self._refresh_actions()
+        worker.start()
+        return True
+
+    def _preview_state_for_current(self):
+        if self._viewing_version is not None:
+            return "VERSION"
+        if self._current_file() in self._anonymized:
+            return {"redacted": "REDACTED", "synthetic": "SYNTHETIC"}.get(
+                self._output_mode, "PSEUDONYMIZED"
+            )
+        return "RAW" if self._current_file() in self._readings else "EMPTY"
+
+    def _keys_manifest_record(self, yaml_text):
+        return {
+            "origin": self._keys_origin or "edited",
+            "identities": pipeline.count_identities(yaml_text),
+            "excluded": len(self._current_not_names()),
+        }
 
     def _create_pending_import_version(self):
         """Snapshot a successfully anonymized document import as a new version."""
         if not self._auto_version_pending:
+            return
+        if not self._readings_publishable():
             return
         if (
             self._project is None
@@ -1388,49 +1767,15 @@ class MainWindow(QMainWindow):
             or not self._anonymized
         ):
             return
-        self._auto_version_pending = False
-        mode = self._project.export_mode or "multi"
-        self._project.export_destination = self._project.workdir / "versions"
-        self._sync_project()
-        stage = None
-        try:
-            write_project(self._project)
-            stage = begin_version(self._project)
-            files = [path for path in self._files if path in self._anonymized]
-            pipeline.save_version_outputs(
-                files,
-                self._anonymizer,
-                self.yaml_edit.toPlainText(),
-                mode,
-                stage.path,
-            )
-            version = finalize_version(
-                self._project,
-                stage,
-                processing={
-                    "language": self._language,
-                    "detection_profile": self._detection_profile,
-                    "trigger": "document_import",
-                    "verification": self._verification_record(),
-                },
-                export={
-                    "format": self._project.export_format,
-                    "mode": mode,
-                },
-                app_version=__version__,
-            )
-        except Exception as exc:
-            if stage is not None:
-                abort_version(stage)
-            QMessageBox.warning(
-                self,
-                "Automatic version failed",
-                f"The draft was anonymized, but its version could not be created: {exc}",
-            )
+        if not self._ensure_fresh_then(self._create_pending_import_version):
             return
-        self._set_dirty(False)
-        self._refresh_project_list()
-        self._set_status(f"Anonymized import saved as immutable {version.version_id}.")
+        self._auto_version_pending = False
+        self._start_version_export(
+            label="",
+            mode=self._project.export_mode or "multi",
+            trigger="document_import",
+            failure_title="Automatic version failed",
+        )
 
     # ------------------------------------------------------------ clipboard ---
     def _current_file(self):
@@ -1443,6 +1788,15 @@ class MainWindow(QMainWindow):
         never leak to the clipboard.
         """
         menu = QMenu(self)
+        if f is not None and self._original_text(f) is not None:
+            label = (
+                "Show pseudonymized text"
+                if self._show_original
+                else "Show original text"
+            )
+            toggle = menu.addAction(label)
+            toggle.triggered.connect(self._toggle_original_preview)
+            menu.addSeparator()
         copy_one = menu.addAction("Copy document (pseudonymized)")
         copy_one.setEnabled(f in self._anonymized)
         copy_one.triggered.connect(lambda: self._copy_document(f))
@@ -1472,7 +1826,7 @@ class MainWindow(QMainWindow):
                     )
                 )
             try:
-                entity_data = pipeline.parse_yaml(self.yaml_edit.toPlainText())
+                entity_data = pipeline.read_keys(self.yaml_edit.toPlainText())
             except ValueError:
                 entity_data = {}
             identity_count = 0
@@ -1524,20 +1878,137 @@ class MainWindow(QMainWindow):
         )
 
     def _apply_manual_entity_yaml(self, changed_yaml, status):
-        """Apply and persist a review edit made from the document preview."""
+        """Apply a review edit and save it to the draft keys file right away."""
+        self._ensure_project()
         self.yaml_edit.setPlainText(changed_yaml)
-        project = self._ensure_project()
-        project.entity_config_yaml = changed_yaml
-        if project.project_file is not None:
-            self._sync_project()
+        path = self._save_keys_now()
+        if path is None:
+            self._set_status(f"{status} Keys in memory only — save the project.")
+            return
+        self._set_status(f"{status} Saved to draft/{path.name}.")
+
+    # ---------------------------------------------------------------- keys ---
+    def _keys_path(self):
+        """The draft keys file, or None for unsaved and legacy projects."""
+        if self._project is None:
+            return None
+        return draft_entities_path(self._project)
+
+    def _save_keys_now(self, text=None):
+        """Write the draft keys file immediately. Returns its path, or None.
+
+        An unsaved (or legacy) project has no keys file yet; its keys stay in
+        memory and the project is marked dirty instead.
+        """
+        self._keys_save_timer.stop()
+        if self._project is None or self._viewing_version is not None:
+            return None
+        text = self.yaml_edit.toPlainText() if text is None else text
+        self._project.entity_config_yaml = text
+        if self._keys_path() is None:
+            self._set_dirty(True)
+            self._update_keys_bar()
+            return None
+        try:
+            path = save_draft_entities(self._project, text)
+        except ProjectError as exc:
+            QMessageBox.warning(self, "Could not save keys", str(exc))
+            self._update_keys_bar()
+            return None
+        self._keys_saved_text = text
+        self._update_keys_bar()
+        return path
+
+    def _autosave_keys(self):
+        """Debounced autosave: only valid YAML replaces the file on disk."""
+        if self._project is None or self._viewing_version is not None:
+            return
+        text = self.yaml_edit.toPlainText()
+        if text == self._keys_saved_text:
+            return
+        if text.strip():
             try:
-                write_project(project)
-            except ProjectError as exc:
-                QMessageBox.warning(
-                    self, "Identity changed but draft could not be saved", str(exc)
-                )
+                pipeline.read_keys(text)
+            except ValueError:
+                self._update_keys_bar()
                 return
-        self._set_status(f"{status} Draft saved.")
+        self._save_keys_now(text)
+        if self._project_tree_panel_ready():
+            self.project_tree_panel.update_active_badge(
+                self._project, self._project.name, self._source_digest_cache
+            )
+
+    def _project_tree_panel_ready(self):
+        return hasattr(self, "project_tree_panel")
+
+    def _update_keys_bar(self):
+        """Say which keys file is behind the entity table and the preview."""
+        if not hasattr(self, "keys_bar"):
+            return
+        text = self.yaml_edit.toPlainText()
+        count = pipeline.count_identities(text)
+        workdir = self._project.workdir if self._project is not None else None
+        if self._viewing_version is not None:
+            path = self._version_keys_path(self._viewing_version)
+            shown = (
+                path.relative_to(workdir).as_posix()
+                if workdir is not None and path.is_relative_to(workdir)
+                else str(path)
+            )
+            self.keys_bar.set_source(
+                f"Keys: {shown} · {_identities(count)} · read-only · current output",
+                tooltip=str(path),
+                folder=path.parent,
+            )
+            return
+        if self._project is None:
+            self.keys_bar.set_source(
+                "Keys: none yet — add documents to detect entities."
+            )
+            return
+        valid = True
+        if text.strip():
+            try:
+                pipeline.read_keys(text)
+            except ValueError:
+                valid = False
+        path = self._keys_path()
+        if path is None:
+            where = (
+                "inside the legacy project file"
+                if self._project.legacy
+                else "in memory only — save the project to keep them"
+            )
+            self.keys_bar.set_source(
+                f"Keys: {where} · {_identities(count)}", warn=not valid
+            )
+            return
+        parts = [f"Keys: draft/{path.name}", _identities(count)]
+        if not valid:
+            parts.append("invalid YAML — not saved; preview uses the last valid keys")
+        elif text == self._keys_saved_text:
+            parts.append("saved ✓")
+        else:
+            parts.append("saving…")
+        if self._keys_origin:
+            parts.append(keys_origin_label(self._keys_origin))
+        excluded = len(self._current_not_names())
+        tooltip = str(path)
+        if excluded:
+            tooltip += f"\n{excluded} name(s) excluded in draft/not_names.json"
+        self.keys_bar.set_source(
+            " · ".join(parts), tooltip=tooltip, folder=path.parent, warn=not valid
+        )
+
+    @staticmethod
+    def _version_keys_path(version_path):
+        """A version's keys file; legacy versions kept it as output/config.yaml."""
+        version_path = Path(version_path)
+        path = version_path / ENTITIES_FILENAME
+        if path.exists():
+            return path
+        legacy = sorted((version_path / "output").rglob("config.yaml"))
+        return legacy[0] if legacy else path
 
     def _copy_document(self, f):
         text = self._display_text(f)
@@ -1766,114 +2237,246 @@ class MainWindow(QMainWindow):
         )
         if matched is None:
             return False
-        entity_type, possible_ids = matched
-        return self.entity_panel.select_entity(entity_type, possible_ids)
+        entity_type, number, variant = matched
+        return self.entity_panel.select_entity(entity_type, number, variant)
+
+    def _version_source_candidates(self):
+        """Source documents a published version could have been rendered from."""
+        state = self._draft_view_state or {}
+        files = [Path(item) for item in state.get("files") or []]
+        if files:
+            return files
+        # Reopened projects (no draft pane yet) still reference their sources.
+        if self._project is not None:
+            return [Path(item) for item in self._project.source_paths]
+        return []
+
+    def _original_source_for(self, path):
+        """The source document(s) a version output was rendered from, or None."""
+        path = Path(path)
+        candidates = self._version_source_candidates()
+        if path.name == "combined.typ":
+            return candidates or None
+        stem = path.stem
+        for marker in ("_pseudonymized", "_pseudo"):
+            if stem.endswith(marker):
+                stem = stem[: -len(marker)]
+                break
+        matches = [source for source in candidates if source.stem == stem]
+        return [matches[0]] if len(matches) == 1 else None
+
+    def _loaded_reading(self, source):
+        """An already-read reading for *source*, or None. Never touches disk."""
+        source = Path(source)
+        draft_readings = (self._draft_view_state or {}).get("extracted") or {}
+        for store in (draft_readings, self._readings):
+            reading = store.get(source)
+            if reading is not None:
+                return reading
+        return None
+
+    def _ensure_original_loaded(self, path):
+        """Read a version's missing sources off the UI thread.
+
+        Selecting a document must never block: the draft's readings are almost
+        always present, but a reopened project (or a version opened before
+        detection finished) may not have them. Show what we have now and fill
+        the preview in when the background read lands.
+        """
+        if self._viewing_version is None or self._draft_view_state is None:
+            return
+        sources = self._original_source_for(path)
+        if not sources:
+            return
+        needed = [
+            source
+            for source in sources
+            if self._loaded_reading(source) is None
+            and source not in self._original_loads
+        ]
+        if not needed:
+            return
+        self._original_loads.update(needed)
+        worker = TaskWorker(lambda: self._read_sources(needed))
+        worker.finished.connect(
+            lambda loaded, batch=needed: self._on_original_loaded(loaded, batch)
+        )
+        worker.error.connect(
+            lambda _message, batch=needed: self._original_loads.difference_update(batch)
+        )
+        self._track(worker)
+        worker.start()
+
+    @staticmethod
+    def _read_sources(sources):
+        loaded = {}
+        for source in sources:
+            try:
+                loaded[Path(source)] = pipeline.extract_one(source)
+            except Exception:
+                continue
+        return loaded
+
+    def _on_original_loaded(self, loaded, batch):
+        self._original_loads.difference_update(batch)
+        if not loaded or self._draft_view_state is None:
+            return
+        self._draft_view_state.setdefault("extracted", {}).update(loaded)
+        self._refresh_actions()
+        self._show_current_preview()
+
+    def _can_show_original(self, path) -> bool:
+        """Whether Original can show something, without loading any file."""
+        if path is None:
+            return False
+        if self._viewing_version is None:
+            return self._original_text(path) is not None
+        sources = self._original_source_for(path)
+        if not sources:
+            return False
+        draft_readings = (self._draft_view_state or {}).get("extracted") or {}
+        return all(
+            draft_readings.get(source) is not None or Path(source).exists()
+            for source in sources
+        )
+
+    def _original_text(self, path) -> str | None:
+        """Unanonymized extracted text for a draft source or a version output."""
+        path = Path(path)
+        if self._viewing_version is None:
+            reading = self._readings.get(path)
+            return reading.text if reading is not None else None
+        sources = self._original_source_for(path)
+        if not sources:
+            return None
+        if path.name == "combined.typ" or len(sources) > 1:
+            parts = []
+            for source in sources:
+                reading = self._loaded_reading(source)
+                if reading is not None:
+                    parts.append(f"{source.name}\n\n{reading.text}")
+            return "\n\n".join(parts) or None
+        reading = self._loaded_reading(sources[0])
+        return reading.text if reading is not None else None
+
+    def _on_show_original(self, checked):
+        self._show_original = bool(checked)
+        self._show_current_preview()
+
+    def _toggle_original_preview(self):
+        self.original_button.setChecked(not self.original_button.isChecked())
+
+    def _view_original_document(self, document_path, kind, version_path):
+        document_path = Path(document_path)
+        if kind == "version_document" and version_path:
+            version_path = Path(version_path)
+            if self._viewing_version != version_path:
+                self._view_version(version_path)
+        if document_path in self._files:
+            self._select_document(document_path)
+        if self.original_button.isChecked():
+            self._show_current_preview()
+        else:
+            self.original_button.setChecked(True)
 
     def _show_current_preview(self):
         f = self._current_file()
         if f is None:
+            self.preview.clear()
+            self._set_preview_state("EMPTY")
             return
+        if self._show_original:
+            original = self._original_text(f)
+            if original is not None:
+                self.preview.setPlainText(original)
+                self._set_preview_state("RAW")
+                return
+            # Version source not read yet: keep the UI responsive and fill in
+            # the original once the background read lands.
+            self._ensure_original_loaded(f)
         text = self._display_text(f)
         if text is not None:
             self.preview.setPlainText(text)
-            state = {
-                "redacted": "REDACTED",
-                "synthetic": "SYNTHETIC",
-            }.get(self._output_mode, "PSEUDONYMIZED")
-            self._set_preview_state(state)
-        elif f in self._extracted:
-            self.preview.setPlainText(self._extracted[f])
+            if self._viewing_version is not None:
+                self._set_preview_state("VERSION")
+            else:
+                state = {
+                    "redacted": "REDACTED",
+                    "synthetic": "SYNTHETIC",
+                }.get(self._output_mode, "PSEUDONYMIZED")
+                self._set_preview_state(state)
+            return
+        reading = self._readings.get(f) or (
+            (self._draft_view_state or {}).get("extracted") or {}
+        ).get(f)
+        if reading is not None:
+            self.preview.setPlainText(reading.text)
             self._set_preview_state("RAW")
+            return
+        # Nothing to show: never leave another document's text on screen.
+        self.preview.clear()
+        self._set_preview_state("EMPTY")
 
     def _on_save(self, mode):
         if not self._anonymized:
+            return
+        if not self._readings_publishable():
+            return
+        if not self._ensure_fresh_then(lambda: self._on_save(mode)):
             return
         if self._project is None or (
             self._project.project_file is None and not self._save_project()
         ):
             return
-        label = ""
         if self.isVisible():
-            label, accepted = QInputDialog.getText(
-                self,
-                "Export anonymization version",
-                "Optional version label:",
-            )
-            if not accepted:
-                return
-            next_number = (
-                max(
-                    (version.number for version in list_versions(self._project)),
-                    default=0,
-                )
-                + 1
-            )
-            config = pipeline.parse_yaml(self.yaml_edit.toPlainText())
+            config = pipeline.read_keys(self.yaml_edit.toPlainText())
             identity_count = sum(
                 len(entities)
                 for entities in config.values()
                 if isinstance(entities, list)
             )
+            action = (
+                "Replace the current output"
+                if list_versions(self._project)
+                else "Write the project output"
+            )
             summary = (
-                f"Create immutable v{next_number:03d}"
-                + (f" · {label.strip()}" if label.strip() else "")
-                + f"\n\nDocuments: {len(self._files)}"
+                f"{action}\n\nDocuments: {len(self._files)}"
                 + f"\nDetected identities: {identity_count}"
                 + f"\nWorkdir: {self._project.workdir}"
-                + "\n\nThe version snapshot and shared variable files may contain "
+                + "\n\nThe output and shared variable files may contain "
                 "original identifiers."
             )
             confirmed = QMessageBox.question(
                 self,
-                "Confirm version export",
+                "Confirm output export",
                 summary,
                 QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
             )
             if confirmed != QMessageBox.StandardButton.Ok:
                 return
-        if not self._confirm_verification("Create version"):
+        if not self._confirm_verification("Write output"):
             return
-        self._project.export_mode = mode
-        self._project.export_destination = self._project.workdir / "versions"
-        self._sync_project()
-        try:
-            write_project(self._project)
-            stage = begin_version(self._project, label)
-        except ProjectError as exc:
-            QMessageBox.warning(self, "Export failed", str(exc))
-            return
-        files = [f for f in self._files if f in self._anonymized]
-        try:
-            pipeline.save_version_outputs(
-                files,
-                self._anonymizer,
-                self.yaml_edit.toPlainText(),
-                mode,
-                stage.path,
-            )
-            version = finalize_version(
-                self._project,
-                stage,
-                processing={
-                    "language": self._language,
-                    "detection_profile": self._detection_profile,
-                    "verification": self._verification_record(),
-                },
-                export={
-                    "format": self._project.export_format,
-                    "mode": mode,
-                },
-                app_version=__version__,
-            )
-        except Exception as exc:
-            abort_version(stage)
-            QMessageBox.warning(self, "Export failed", str(exc))
-            return
-        self._set_dirty(False)
-        self._refresh_project_list()
-        self._set_status(
-            f"Created immutable {version.version_id} with {len(files)} document(s)."
+        self._start_version_export(
+            label="", mode=mode, trigger="manual", failure_title="Export failed"
         )
+
+    def _persist_language(self):
+        """Store the selected language in the project file."""
+        project = self._project
+        if project is None:
+            return False
+        project.language = self._language
+        if project.project_file is None:
+            self._set_dirty(True)
+            return False
+        try:
+            write_project(project)
+        except ProjectError as exc:
+            self._set_dirty(True)
+            self._set_status(f"Could not store the language setting: {exc}")
+            return False
+        return True
 
     def _on_language(self, _index):
         lang = self.lang_combo.currentData()
@@ -1882,20 +2485,8 @@ class MainWindow(QMainWindow):
         if lang == self._language:
             return
         self._language = lang
-        if self._project is not None:
-            self._project.language = lang
-            self._set_dirty(True)
-        if self._anonymized or self._anonymizer is not None:
-            self._anonymized = {}
-            self._anonymizer = None
-            self.yaml_edit.blockSignals(True)
-            self.yaml_edit.clear()
-            self.yaml_edit.blockSignals(False)
-            if self._project is not None:
-                self._project.entity_config_yaml = ""
-            self._set_status("Language changed — run Anonymize again.")
-            self._refresh_file_list()
-            self._refresh_actions()
+        self._persist_language()
+        self._redetect_after_setting_change("Language")
 
     def _on_detection_profile(self, _index):
         profile = self.profile_combo.currentData()
@@ -1904,13 +2495,29 @@ class MainWindow(QMainWindow):
         self._detection_profile = profile
         if self._project is not None:
             self._project.detection_profile = profile
-            self._set_dirty(True)
-        if self._anonymized or self._anonymizer is not None:
-            self._anonymized = {}
-            self._anonymizer = None
-            self._set_status("Detection profile changed — run Anonymize again.")
-            self._refresh_file_list()
-            self._refresh_actions()
+            if self._project.project_file is not None:
+                try:
+                    write_project(self._project)
+                except ProjectError as exc:
+                    self._set_dirty(True)
+                    self._set_status(f"Could not store the detection profile: {exc}")
+            else:
+                self._set_dirty(True)
+        self._redetect_after_setting_change("Detection profile")
+
+    def _redetect_after_setting_change(self, setting):
+        """Re-run detection with the new setting; the review is merged, not lost."""
+        if self._viewing_version is not None:
+            self._redetect_on_return = True
+            self._set_status(
+                f"{setting} saved — the draft is re-detected when you return to it."
+            )
+            return
+        if self._readings:
+            self._set_status(f"{setting} changed — re-detecting (review is kept)…")
+            self._on_redetect()
+        elif self._project is not None:
+            self._set_status(f"{setting} saved with the project.")
 
     def _on_output_mode(self, _index):
         output_mode = self.output_combo.currentData()
@@ -1925,7 +2532,19 @@ class MainWindow(QMainWindow):
 
     def _on_worker_error(self, message):
         self._pending_tree_navigation = None
+        self._after_reapply = None
+        self._force_review_merge = False
+        review = self._pending_review_yaml
+        self._pending_review_yaml = None
+        if review and not self.yaml_edit.toPlainText().strip():
+            # Detection failed after the review was cleared from view; put it
+            # back (it is still on disk — autosave never saw the blank).
+            self.yaml_edit.blockSignals(True)
+            self.yaml_edit.setPlainText(review)
+            self.yaml_edit.blockSignals(False)
+            self._refresh_entity_table()
         self._set_busy(False)
+        self._refresh_actions()
         self._set_preview_state("ERROR")
         self._set_status("Error.")
         QMessageBox.warning(self, "Error", message)
@@ -1950,19 +2569,31 @@ class MainWindow(QMainWindow):
         self._advance_session_generation()
         self._viewing_version = None
         self._draft_view_state = None
+        self._original_loads.clear()
+        self._version_yaml_overrides = {}
+        self._version_snapshot_yaml = ""
         self._selected_file = None
         self._files = []
-        self._extracted = {}
+        self._readings = {}
         self._anonymized = {}
         self._anonymizer = None
         self._yaml_text = ""
         self._auto_version_pending = False
+        self._pending_review_yaml = None
+        self._after_reapply = None
+        self._keys_origin = None
+        self._keys_saved_text = None
+        self._redetect_on_return = False
+        self._keys_save_timer.stop()
+        self._reapply_timer.stop()
         self.yaml_edit.blockSignals(True)
+        self.yaml_edit.setReadOnly(False)
         self.yaml_edit.clear()
         self.yaml_edit.blockSignals(False)
         self.preview.clear()
         self._set_preview_state("EMPTY")
         self._refresh_entity_table()
+        self._update_keys_bar()
         self._refresh_file_list()
         self._refresh_actions()
 
@@ -1971,23 +2602,26 @@ class MainWindow(QMainWindow):
             return
         if self._viewing_version is not None:
             self._return_to_draft()
+        if self._keys_save_timer.isActive():
+            self._autosave_keys()
+        self._reapply_timer.stop()
         self._draft_view_state = {
             "files": self._files,
-            "extracted": self._extracted,
+            "extracted": self._readings,
             "anonymized": self._anonymized,
             "yaml": self.yaml_edit.toPlainText(),
             "selected": self._current_file(),
         }
         files = version_document_files(version_path)
         self._files = files
-        self._extracted = {}
+        self._readings = {}
         self._anonymized = {}
         for path in files:
             try:
                 self._anonymized[path] = path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
-        snapshot = version_path / "entities.yaml"
+        snapshot = self._version_keys_path(version_path)
         yaml_text = snapshot.read_text(encoding="utf-8") if snapshot.exists() else ""
         self.yaml_edit.blockSignals(True)
         self.yaml_edit.setPlainText(yaml_text)
@@ -2001,7 +2635,8 @@ class MainWindow(QMainWindow):
             self._select_document(self._selected_file)
         self._refresh_actions()
         self._set_preview_state("VERSION")
-        self._set_status(f"Viewing {version_path.name} · read-only.")
+        self._update_keys_bar()
+        self._set_status("Viewing the saved output · read-only.")
 
     def _return_to_draft(self):
         if self._viewing_version is None or self._draft_view_state is None:
@@ -2009,8 +2644,10 @@ class MainWindow(QMainWindow):
         state = self._draft_view_state
         self._viewing_version = None
         self._draft_view_state = None
+        self._version_yaml_overrides = {}
+        self._version_snapshot_yaml = ""
         self._files = state["files"]
-        self._extracted = state["extracted"]
+        self._readings = state["extracted"]
         self._anonymized = state["anonymized"]
         self._selected_file = state["selected"]
         self.yaml_edit.blockSignals(True)
@@ -2023,7 +2660,11 @@ class MainWindow(QMainWindow):
             self._select_document(self._selected_file)
         self._show_current_preview()
         self._refresh_actions()
+        self._update_keys_bar()
         self._set_status("Viewing current draft.")
+        if self._redetect_on_return:
+            self._redetect_on_return = False
+            self._redetect_after_setting_change("Settings")
 
     def _on_new_project(self, _checked=False, *, name=None, parent=None):
         if name is None and self.isVisible():
@@ -2046,7 +2687,11 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             return
         self._reset_session()
-        self._project = Project(name=name)
+        self._project = Project(
+            name=name,
+            language=self._toolbar_language(),
+            detection_profile=self._detection_profile,
+        )
         if parent is not None:
             try:
                 create_project_workdir(self._project, parent, name)
@@ -2056,6 +2701,7 @@ class MainWindow(QMainWindow):
                 return
             self._settings.add_recent_project(self._project.project_file)
             self._settings.set_directory("projects", parent)
+            self._keys_saved_text = self._project.entity_config_yaml
         self._language = self._project.language
         self._detection_profile = self._project.detection_profile
         language_index = self.lang_combo.findData(self._language)
@@ -2223,6 +2869,8 @@ class MainWindow(QMainWindow):
         output_index = self.output_combo.findData(project.preview_format)
         self.output_combo.setCurrentIndex(max(0, output_index))
         self.yaml_edit.setPlainText(project.entity_config_yaml)
+        self._keys_saved_text = project.entity_config_yaml
+        self._keys_origin = "saved_review" if project.entity_config_yaml else None
         self._loading_project = False
         if project.project_file not in self._settings.recent_projects():
             self._settings.add_recent_project(project.project_file)
@@ -2231,7 +2879,7 @@ class MainWindow(QMainWindow):
         project.entity_config_yaml = saved_entity_config
         existing = [source for source in project.source_paths if source.exists()]
         missing = len(project.source_paths) - len(existing)
-        self._apply_saved_config = bool(saved_entity_config and existing)
+        self._update_keys_bar()
         if existing:
             self._load_paths(existing, collected=True)
         else:
@@ -2244,6 +2892,7 @@ class MainWindow(QMainWindow):
             self.yaml_edit.setPlainText(saved_entity_config)
             self.yaml_edit.blockSignals(False)
             self._refresh_entity_table()
+            self._refresh_actions()
         if missing:
             self._set_status(f"Project opened with {missing} missing source file(s).")
         else:
@@ -2279,7 +2928,12 @@ class MainWindow(QMainWindow):
             destination = saved
         self._sync_project()
         if self._project.name == "Untitled project":
-            self._project.name = destination.name.removesuffix(PROJECT_SUFFIX)
+            # Canonical workdirs all use the same filename; name after the folder.
+            self._project.name = (
+                destination.parent.name
+                if destination.name == CANONICAL_PROJECT_FILENAME
+                else destination.name.removesuffix(PROJECT_SUFFIX)
+            )
         try:
             saved = write_project(self._project, destination)
         except ProjectError as exc:
@@ -2287,6 +2941,7 @@ class MainWindow(QMainWindow):
             return False
         self._settings.add_recent_project(saved)
         self._settings.set_directory("projects", saved.parent)
+        self._keys_saved_text = self._project.entity_config_yaml
         self._set_dirty(False)
         self._set_status(f"Project saved to {saved}.")
         self._create_pending_import_version()
@@ -2339,6 +2994,11 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             event.ignore()
             return
+        if self._export_worker is not None:
+            # Never abandon a half-written version; it finishes in seconds.
+            self._set_status("Finishing the version being written…")
+            self._export_worker.wait()
+        detect_process.shutdown()
         for d in self._temp_dirs:
             shutil.rmtree(d, ignore_errors=True)
         super().closeEvent(event)

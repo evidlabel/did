@@ -4,13 +4,13 @@
 
 **Aim.** Local-first review and pseudonymization of identity-bearing documents so a human can correct detection, and a remote model never sees the source.
 
-**Use.** Detect entities (Presidio + spaCy, English and Danish). Review in the desktop app. Emit versioned pseudonymized documents, or a token-only Markdown/JSON/ZIP handoff. Placeholders like `#(P1V1)` / `#(P1V2)` are the same person, two written forms.
+**Use.** Detect entities (Presidio + spaCy, English, Danish, and Swedish). Review in the desktop app. Emit pseudonymized documents into one output folder, or a token-only Markdown/JSON/ZIP handoff. Placeholders like `#(P1V1)` / `#(P1V2)` are the same person, two written forms.
 
 **Features.**
-- CLI + GUI over one on-disk case workdir (mutable draft, checksummed versions)
+- CLI + GUI over one on-disk case workdir (mutable draft, one rewritten output)
 - Entity review: type correction, aliases, identity merge, persistent exclusions
 - Searchable preview, clickable keys, manual labelling
-- PDF / DOCX / Markdown / plain-text extraction
+- PDF / DOCX / Markdown / plain-text and other text formats extraction
 - Output verification that re-scans for identifiers that survived replacement
 - Faker identities, or irreversible `[REDACTED]`
 
@@ -27,7 +27,13 @@ uv tool install 'did[models] @ git+https://github.com/evidlabel/did.git'   # CLI
 uv tool install 'did[all] @ git+https://github.com/evidlabel/did.git'      # + Qt GUI
 did --help
 did gui    # needs extra did[gui] (included in did[all])
+did models da    # fetch only the models a language needs (here Danish + English)
 ```
+
+Missing models never block you. The GUI downloads the model for a document's
+language the first time you detect in it, and `did models [da en sv]` installs
+them ahead of time. Only the missing model wheels are installed; no other
+package changes. In a checkout, `make models` does the same.
 
 ## Development
 

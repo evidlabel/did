@@ -24,11 +24,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import pipeline
 from ..project import (
+    ENTITIES_FILENAME,
     PROJECT_SUFFIX,
     ProjectError,
+    draft_entities_path,
     list_versions,
     load_not_names,
+    not_names_path,
 )
 from ..project import load_project as read_project
 
@@ -37,6 +41,8 @@ ROLE_PROJECT_PATH = Qt.ItemDataRole.UserRole + 21
 ROLE_VERSION_PATH = Qt.ItemDataRole.UserRole + 22
 ROLE_DOCUMENT_PATH = Qt.ItemDataRole.UserRole + 23
 ROLE_ACTIVE_PROJECT = Qt.ItemDataRole.UserRole + 24
+# On-disk file a node stands for (keys nodes), for "Copy path" / file manager.
+ROLE_FILE_PATH = Qt.ItemDataRole.UserRole + 25
 
 TREE_STATE_STYLE = {
     "synced": ("✓", "#4caf50"),
@@ -53,6 +59,7 @@ _MODE_COLORS = {
     "META": "#8e9aaf",
     "EXCLUDED": "#f5a623",
     "DO NOT PSEUDONYMIZE": "#f5a623",
+    "KEYS": "#26a69a",
 }
 
 _MODE_TOOLTIPS = {
@@ -63,6 +70,7 @@ _MODE_TOOLTIPS = {
     "META": "Project metadata included in LLM handoffs.",
     "EXCLUDED": "Reviewed detections excluded from pseudonymization.",
     "DO NOT PSEUDONYMIZE": "Persisted project exclusion; this text is retained unchanged.",
+    "KEYS": "Entity keys (real values ↔ tokens); contains personal data.",
 }
 
 
@@ -176,6 +184,45 @@ def draft_sync_state(project, latest_version, cache: dict):
     ):
         return "out_of_sync"
     return "synced"
+
+
+_ORIGIN_LABELS = {
+    "saved_review": "saved review",
+    "merged": "saved review merged with new detections",
+    "fresh": "fresh detection",
+    "edited": "reviewed draft",
+}
+
+
+def keys_origin_label(origin) -> str:
+    return _ORIGIN_LABELS.get(str(origin or ""), str(origin or "unknown"))
+
+
+def version_keys_summary(version) -> str:
+    """One line describing which keys produced *version*, from its manifest."""
+    keys = version.manifest.get("keys") or {}
+    parts = [f"Keys: {ENTITIES_FILENAME}"]
+    if keys.get("identities") is not None:
+        parts.append(f"{keys['identities']} identities")
+    if keys.get("excluded"):
+        parts.append(f"{keys['excluded']} excluded")
+    if keys.get("origin"):
+        parts.append(keys_origin_label(keys["origin"]))
+    if keys.get("sha256"):
+        parts.append(f"sha {str(keys['sha256'])[:10]}")
+    trigger = version.manifest.get("processing", {}).get("trigger")
+    if trigger:
+        parts.append(f"trigger {trigger}")
+    return " · ".join(parts)
+
+
+def keys_item(label_path: str, file_path, yaml_text: str, *, tooltip: str):
+    count = pipeline.count_identities(yaml_text)
+    item = QTreeWidgetItem([f"Keys · {label_path} ({count})", ""])
+    item.setData(0, ROLE_FILE_PATH, str(file_path) if file_path else "")
+    item.setToolTip(0, tooltip)
+    set_tree_mode(item, "KEYS")
+    return item
 
 
 def set_tree_state(item, state, *, tooltip=None):
@@ -326,7 +373,7 @@ class ProjectTreePanel(QWidget):
             latest_version = versions[-1] if versions else None
             draft_state = draft_sync_state(project, latest_version, source_digest_cache)
             state_text = (
-                "No published version"
+                "No output yet"
                 if latest_version is None
                 else f"Current with {latest_version.version_id}"
                 if draft_state == "synced"
@@ -402,7 +449,7 @@ class ProjectTreePanel(QWidget):
                 elif source in draft_extracted:
                     mode, state = "RAW", "Raw text ready"
                 elif sync_state == "synced":
-                    mode, state = "PSEUDO", "Matches latest version"
+                    mode, state = "PSEUDO", "Matches the output"
                 elif not exists:
                     mode, state = "PENDING", "Missing source"
                 else:
@@ -433,7 +480,8 @@ class ProjectTreePanel(QWidget):
                 excluded_group.setData(0, ROLE_PROJECT_PATH, str(path or ""))
                 excluded_group.setForeground(0, QBrush(QColor("#f5a623")))
                 excluded_group.setToolTip(
-                    0, "Reviewed items stored in draft/not_names.json"
+                    0,
+                    f"Reviewed items never pseudonymized · {not_names_path(project)}",
                 )
                 set_tree_mode(excluded_group, "EXCLUDED")
                 draft.addChild(excluded_group)
@@ -448,18 +496,32 @@ class ProjectTreePanel(QWidget):
                     )
                     set_tree_mode(excluded, "DO NOT PSEUDONYMIZE")
                     excluded_group.addChild(excluded)
+            keys_path = draft_entities_path(project)
+            draft_keys = keys_item(
+                ENTITIES_FILENAME,
+                keys_path,
+                project.entity_config_yaml,
+                tooltip=(
+                    f"Working keys, autosaved on every edit · {keys_path}"
+                    if keys_path is not None
+                    else "Keys are in memory only — save the project to keep them."
+                ),
+            )
+            draft_keys.setData(0, ROLE_PROJECT_KIND, "draft_keys")
+            draft_keys.setData(0, ROLE_PROJECT_PATH, str(path or ""))
+            draft.addChild(draft_keys)
             for version in versions:
-                version_label = f"v{version.number:03d}"
-                if version.label:
-                    version_label += f" · {version.label}"
-                version_item = QTreeWidgetItem([version_label, ""])
+                version_item = QTreeWidgetItem(["Output", ""])
                 version_item.setData(0, ROLE_PROJECT_KIND, "version")
                 version_item.setData(0, ROLE_PROJECT_PATH, str(path or ""))
                 version_item.setData(0, ROLE_VERSION_PATH, str(version.path))
                 set_tree_state(
                     version_item,
                     "synced",
-                    tooltip=f"Completed immutable version · {version.created_at}",
+                    tooltip=(
+                        f"Current output · {version.created_at}\n"
+                        f"{version_keys_summary(version)}"
+                    ),
                 )
                 has_fake_values = (
                     version.path / "output" / "shared_fakevars.typ"
@@ -467,6 +529,30 @@ class ProjectTreePanel(QWidget):
                 version_mode = "PSEUDO/FAKE" if has_fake_values else "PSEUDO"
                 set_tree_mode(version_item, version_mode)
                 project_item.addChild(version_item)
+                version_keys_path = version.path / ENTITIES_FILENAME
+                if not version_keys_path.exists():
+                    # Versions from before entities.yaml was the only keys file.
+                    version_keys_path = next(
+                        iter(sorted((version.path / "output").rglob("config.yaml"))),
+                        version_keys_path,
+                    )
+                try:
+                    version_keys_text = version_keys_path.read_text(encoding="utf-8")
+                except OSError:
+                    version_keys_text = ""
+                version_keys = keys_item(
+                    version_keys_path.relative_to(version.path).as_posix(),
+                    version_keys_path,
+                    version_keys_text,
+                    tooltip=(
+                        f"Read-only keys that produced {version.version_id} · "
+                        f"{version_keys_path}\n{version_keys_summary(version)}"
+                    ),
+                )
+                version_keys.setData(0, ROLE_PROJECT_KIND, "version_keys")
+                version_keys.setData(0, ROLE_PROJECT_PATH, str(path or ""))
+                version_keys.setData(0, ROLE_VERSION_PATH, str(version.path))
+                version_item.addChild(version_keys)
                 output_dir = version.path / "output"
                 for output in version_document_files(version.path):
                     document = QTreeWidgetItem(
@@ -538,7 +624,7 @@ class ProjectTreePanel(QWidget):
                     if state == "synced"
                     else f"Draft differs from {latest.version_id}"
                     if latest is not None
-                    else "No published version"
+                    else "No output yet"
                 )
                 item.setText(0, name)
                 set_tree_state(

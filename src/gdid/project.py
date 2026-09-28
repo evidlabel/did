@@ -25,6 +25,8 @@ PROJECT_SUFFIX = ".did-project.yaml"
 CANONICAL_PROJECT_FILENAME = "project.did-project.yaml"
 NOT_NAMES_FILENAME = "not_names.json"
 ENTITIES_FILENAME = "entities.yaml"
+# One output per project; a new export replaces this folder in place.
+CURRENT_VERSION_ID = "output"
 README_FILENAME = "README.md"
 SOURCE_REGISTRY_FILENAME = "sources.json"
 
@@ -149,10 +151,10 @@ def project_from_data(data: dict, path: Path) -> Project:
     ui = _require_mapping(data.get("ui", {}), "ui")
     export = _require_mapping(data.get("export", {}), "export")
     language = processing.get("language", "da")
-    if language not in {"da", "en"}:
+    if language not in {"da", "en", "sv"}:
         raise ProjectError(f"Unsupported project language: {language!r}.")
     mode = export.get("mode", "multi")
-    if mode not in {"multi", "single"}:
+    if mode not in {"multi", "single", "pdf"}:
         raise ProjectError(f"Unsupported export mode: {mode!r}.")
     base = path.parent
     destination = export.get("destination")
@@ -312,6 +314,34 @@ def _save_source_registry(project: Project) -> Path:
     return path
 
 
+def draft_entities_path(project: Project) -> Path | None:
+    """The draft keys file (``draft/entities.yaml``), or None when unsaved."""
+    if project.workdir is None or project.legacy:
+        return None
+    return project.workdir / "draft" / ENTITIES_FILENAME
+
+
+def save_draft_entities(project: Project, text: str) -> Path:
+    """Atomically write only the draft keys file and return its path.
+
+    The review is autosaved through this, so the keys on screen and the keys
+    on disk never diverge; project settings still save with the project.
+    """
+    path = draft_entities_path(project)
+    if path is None:
+        raise ProjectError("Save the project before storing its keys.")
+    project.entity_config_yaml = text
+    try:
+        _atomic_write_text(path, text)
+    except OSError as exc:
+        raise ProjectError(f"Could not save {ENTITIES_FILENAME}: {exc}") from exc
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return path
+
+
 def create_project_workdir(project: Project, parent, folder_name: str) -> Path:
     """Create and save a canonical project workdir below ``parent``."""
     cleaned = "".join(
@@ -423,13 +453,8 @@ def save_not_names(project: Project, names) -> Path:
     return path
 
 
-def _version_slug(label: str) -> str:
-    slug = "".join(char.lower() if char.isalnum() else "-" for char in label.strip())
-    return "-".join(part for part in slug.split("-") if part)[:48]
-
-
 def list_versions(project: Project) -> list[ProjectVersion]:
-    """Return valid completed versions ordered by sequence number."""
+    """Return the project's single output, if one has been written."""
     if project.workdir is None:
         return []
     versions_dir = project.workdir / "versions"
@@ -461,20 +486,17 @@ def list_versions(project: Project) -> list[ProjectVersion]:
 
 
 def begin_version(project: Project, label="") -> VersionStage:
-    """Allocate a hidden staging directory for the next immutable version."""
+    """Allocate a hidden staging directory for the single output slot.
+
+    There is one output per project; finalizing replaces whatever it held
+    before, so ``versions/`` never grows into a confusing stack of v001, v002…
+    """
     if project.workdir is None:
-        raise ProjectError("Save the project before exporting a version.")
-    existing = list_versions(project)
-    number = max((version.number for version in existing), default=0) + 1
-    clean_label = label.strip()
-    slug = _version_slug(clean_label)
-    version_id = f"v{number:03d}" + (f"-{slug}" if slug else "")
+        raise ProjectError("Save the project before exporting output.")
     versions_dir = project.workdir / "versions"
     versions_dir.mkdir(parents=True, exist_ok=True)
-    final_path = versions_dir / version_id
-    if final_path.exists():
-        raise ProjectError(f"Version already exists: {final_path}")
-    stage_path = versions_dir / f".{version_id}.staging-{uuid4().hex}"
+    final_path = versions_dir / CURRENT_VERSION_ID
+    stage_path = versions_dir / f".{CURRENT_VERSION_ID}.staging-{uuid4().hex}"
     stage_path.mkdir()
     (stage_path / "output").mkdir()
     shutil.copy2(
@@ -484,7 +506,7 @@ def begin_version(project: Project, label="") -> VersionStage:
     exclusions = not_names_path(project)
     if exclusions.exists():
         shutil.copy2(exclusions, stage_path / NOT_NAMES_FILENAME)
-    return VersionStage(number, version_id, clean_label, stage_path, final_path)
+    return VersionStage(1, CURRENT_VERSION_ID, "", stage_path, final_path)
 
 
 def _file_record(path: Path, base: Path | None = None) -> dict:
@@ -508,8 +530,13 @@ def finalize_version(
     processing: dict,
     export: dict,
     app_version: str,
+    keys: dict | None = None,
 ) -> ProjectVersion:
-    """Write an audit manifest and atomically publish a staged version."""
+    """Write an audit manifest and atomically publish a staged version.
+
+    ``keys`` describes how the version's ``entities.yaml`` came about (origin,
+    identity and exclusion counts); its path and digest are recorded here.
+    """
     sources = []
     for path in project.source_paths:
         if path.exists() and path.is_file():
@@ -521,6 +548,13 @@ def finalize_version(
         for path in sorted(stage.path.rglob("*"))
         if path.is_file() and path.name != "manifest.json"
     ]
+    keys_file = stage.path / ENTITIES_FILENAME
+    keys_record = {
+        "path": ENTITIES_FILENAME,
+        **(keys or {}),
+    }
+    if keys_file.exists():
+        keys_record["sha256"] = _file_record(keys_file)["sha256"]
     manifest = {
         "schema_version": 1,
         "project_id": project.project_id,
@@ -533,6 +567,7 @@ def finalize_version(
         "processing": processing,
         "export": export,
         "sources": sources,
+        "keys": keys_record,
         "files": version_files,
         "sensitive_files": [
             ENTITIES_FILENAME,
@@ -544,10 +579,13 @@ def finalize_version(
         stage.path / "manifest.json",
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
     )
+    if stage.final_path.exists():
+        # One output slot: replace the previous one instead of accumulating.
+        _remove_version(stage.final_path)
     try:
         os.replace(stage.path, stage.final_path)
     except OSError as exc:
-        raise ProjectError(f"Could not publish version: {exc}") from exc
+        raise ProjectError(f"Could not publish output: {exc}") from exc
     _restrict_permissions(stage.final_path, read_only=True)
     return ProjectVersion(
         stage.number,
@@ -561,6 +599,15 @@ def finalize_version(
 
 def abort_version(stage: VersionStage) -> None:
     shutil.rmtree(stage.path, ignore_errors=True)
+
+
+def _remove_version(path: Path) -> None:
+    """Delete a published output, restoring write permission first."""
+    _restrict_permissions(path)
+    try:
+        shutil.rmtree(path)
+    except OSError as exc:
+        raise ProjectError(f"Could not replace the previous output: {exc}") from exc
 
 
 def _restrict_permissions(root: Path, *, read_only=False) -> None:

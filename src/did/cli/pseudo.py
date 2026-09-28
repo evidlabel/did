@@ -10,7 +10,7 @@ from treeparse import argument, command, group, option
 
 from ..core.anonymizer import Anonymizer
 from ..utils.console import console, print_counts
-from ..utils.file_utils import anonymize_file, export_to_typst
+from ..utils.file_utils import anonymize_file, export_to_typst, read_document
 
 
 def plain(file, config, output):
@@ -82,7 +82,12 @@ def typst(file, config, output):
         anonymizer.load_replacements(config_data)
 
         console.print(f"Processing [cyan]{file}[/cyan]...")
-        export_to_typst(input_path, anonymizer, main_path)
+        export_to_typst(
+            input_path,
+            anonymizer,
+            main_path,
+            source_text=read_document(input_path).text,
+        )
 
         console.print("[bold]Replacement counts:[/bold]")
         print_counts(anonymizer.counts, "replaced")

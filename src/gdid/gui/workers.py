@@ -9,8 +9,9 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
 from did.core.anonymizer import MODELS_INSTALL_HINT, Anonymizer
+from did.core.model_install import ensure_spacy_models
 
-from .. import pipeline
+from .. import detect_process, pipeline
 
 
 class ExtractWorker(QThread):
@@ -51,6 +52,7 @@ class AnonymizeWorker(QThread):
     # anonymizer, yaml_str, {Path: anonymized}, VerificationReport
     finished = Signal(object, str, object, object)
     error = Signal(str)
+    status = Signal(str)  # e.g. a one-time model download
 
     def __init__(
         self,
@@ -70,16 +72,39 @@ class AnonymizeWorker(QThread):
 
     def run(self):
         try:
-            anonymizer, yaml_str = pipeline.detect_to_yaml(
-                self._texts.values(),
-                self._language,
-                detection_profile=self._detection_profile,
-                anonymizer_factory=self._factory,
-            )
-            anonymized = pipeline.pseudonymize_all(anonymizer, yaml_str, self._texts)
-            report = pipeline.verify_outputs(
-                yaml_str, anonymized, self._not_names, anonymizer=anonymizer
-            )
+            if self._factory is Anonymizer:
+                # First detection in a language fetches its model instead of
+                # failing; only that language's model (plus English) is needed.
+                ensure_spacy_models(
+                    self._detection_profile or "thorough",
+                    [self._language],
+                    progress=self.status.emit,
+                )
+                # spaCy holds the GIL, which would freeze Qt even in this
+                # thread; the whole detection pass runs in a child process.
+                yaml_str, anonymized, report = detect_process.run_detection(
+                    self._texts,
+                    self._language,
+                    self._detection_profile or "thorough",
+                    self._not_names,
+                )
+                anonymizer = Anonymizer.for_regex_only(
+                    self._language, self._detection_profile or "thorough"
+                )
+                anonymizer.load_replacements(pipeline.read_keys(yaml_str))
+            else:
+                anonymizer, yaml_str = pipeline.detect_to_yaml(
+                    self._texts.values(),
+                    self._language,
+                    detection_profile=self._detection_profile,
+                    anonymizer_factory=self._factory,
+                )
+                anonymized = pipeline.pseudonymize_all(
+                    anonymizer, yaml_str, self._texts
+                )
+                report = pipeline.verify_outputs(
+                    yaml_str, anonymized, self._not_names, anonymizer=anonymizer
+                )
         except Exception as exc:
             self.error.emit(str(exc))
             return
@@ -121,3 +146,22 @@ class PseudoWorker(QThread):
             self.error.emit(str(exc))
             return
         self.finished.emit(anonymized, report)
+
+
+class TaskWorker(QThread):
+    """Run one blocking callable (e.g. writing a version) off the UI thread."""
+
+    finished = Signal(object)  # the callable's return value
+    error = Signal(str)
+
+    def __init__(self, task):
+        super().__init__()
+        self._task = task
+
+    def run(self):
+        try:
+            result = self._task()
+        except Exception as exc:
+            self.error.emit(str(exc))
+            return
+        self.finished.emit(result)

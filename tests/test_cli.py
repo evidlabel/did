@@ -236,3 +236,33 @@ def test_pseudo_plain_invalid_yaml_exits_nonzero(tmp_path):
     out, code = _run_cli(["did", "pseudo", "plain", str(doc), "-c", str(config)])
     assert code == 1
     assert "Error:" in _flat(out)
+
+
+# --------------------------------------------- command tree and definitions ---
+def test_cli_builds_without_definition_errors():
+    """Building the parser validates every callback against its args/options.
+
+    A treeparse definition mismatch (arg name or type) raises here rather than
+    crashing the first time a user runs the command.
+    """
+    from did.cli import app
+
+    assert app.build_parser() is not None
+
+
+def test_cli_lists_every_registered_command():
+    from did.cli import app
+
+    names = {command.name for command in app.commands}
+    names |= {group.name for group in app.subgroups}
+    assert {"extract", "full", "batch", "verify", "gui", "models", "pseudo"} <= names
+
+
+def test_models_command_reports_when_nothing_is_missing(monkeypatch):
+    """`did models` exits 0 and names no download when the env is complete."""
+    from did.cli import models as models_module
+
+    monkeypatch.setattr(models_module, "ensure_spacy_models", lambda *a, **k: [])
+    out, code = _run_cli(["did", "models", "da"])
+    assert code == 0
+    assert "already installed" in _flat(out)

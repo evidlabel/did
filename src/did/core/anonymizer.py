@@ -16,34 +16,73 @@ from .recognizers import get_custom_recognizers
 from .replacement import anonymize
 
 SPACY_MODELS = {
-    "thorough": {"da": "da_core_news_lg", "en": "en_core_web_md"},
-    "balanced": {"da": "da_core_news_sm", "en": "en_core_web_md"},
+    "thorough": {
+        "da": "da_core_news_lg",
+        "en": "en_core_web_md",
+        "sv": "sv_core_news_lg",
+    },
+    "balanced": {
+        "da": "da_core_news_sm",
+        "en": "en_core_web_md",
+        "sv": "sv_core_news_sm",
+    },
 }
-MODELS_INSTALL_HINT = (
-    "uv sync --extra models  "
-    'or  uv tool install "did[models] @ git+https://github.com/evidlabel/did.git"'
-)
+# Swedish spaCy NER uses PRS/LOC/TME. Danish uses PER/GPE. Both feed the same
+# Presidio types.
+NER_LABEL_MAPPING = {
+    "PER": "PERSON",
+    "PRS": "PERSON",
+    "GPE": "LOCATION",
+    "LOC": "LOCATION",
+    "ORG": "ORGANIZATION",
+    "MISC": "NRP",
+    "TME": "DATE_TIME",
+}
+MODELS_INSTALL_HINT = "did models  (or, in a checkout: make models)"
 
 
-def missing_spacy_models(detection_profile="thorough"):
-    """Return spaCy model package names that are not installed for *profile*."""
+def models_for(language, detection_profile="thorough"):
+    """Model per language code needed to detect *language*.
+
+    English is always included: the analyzer registers it alongside the
+    document language. Other languages' models are not needed, so a Danish
+    case never requires the Swedish model to be installed.
+    """
     if detection_profile not in SPACY_MODELS:
         raise ValueError(f"Unknown detection profile: {detection_profile!r}")
+    selected = SPACY_MODELS[detection_profile]
+    if language not in selected:
+        raise ValueError(
+            f"Unsupported language: {language!r}. Choose from {', '.join(selected)}."
+        )
+    return {code: selected[code] for code in dict.fromkeys([language, "en"])}
+
+
+def missing_spacy_models(detection_profile="thorough", languages=None):
+    """Return model package names not installed for *profile* and *languages*.
+
+    With no *languages*, every language of the profile is checked.
+    """
+    if detection_profile not in SPACY_MODELS:
+        raise ValueError(f"Unknown detection profile: {detection_profile!r}")
+    names = {}
+    for language in languages or SPACY_MODELS[detection_profile]:
+        names.update(models_for(language, detection_profile))
     return [
         name
-        for name in SPACY_MODELS[detection_profile].values()
+        for name in dict.fromkeys(names.values())
         if not spacy.util.is_package(name)
     ]
 
 
-def require_spacy_models(detection_profile="thorough"):
+def require_spacy_models(detection_profile="thorough", languages=None):
     """Raise ValueError listing missing models instead of letting spaCy pip-install.
 
     Presidio calls ``spacy.cli.download`` when a model is absent. That runs
     ``python -m pip``, which uv venvs do not provide, and spaCy then
     ``sys.exit``s — crashing a GUI QThread rather than surfacing an error.
     """
-    missing = missing_spacy_models(detection_profile)
+    missing = missing_spacy_models(detection_profile, languages)
     if missing:
         raise ValueError(
             "Required spaCy model(s) not installed: "
@@ -56,27 +95,20 @@ class Anonymizer:
     """Handles entity detection and anonymization."""
 
     def __init__(self, language="en", detection_profile="thorough"):
-        if detection_profile not in SPACY_MODELS:
-            raise ValueError(f"Unknown detection profile: {detection_profile!r}")
-        selected_models = SPACY_MODELS[detection_profile]
+        selected_models = models_for(language, detection_profile)
         conf = {
             "nlp_engine_name": "spacy",
             "models": [
-                {"lang_code": "da", "model_name": selected_models["da"]},
-                {"lang_code": "en", "model_name": selected_models["en"]},
+                {"lang_code": code, "model_name": model_name}
+                for code, model_name in selected_models.items()
             ],
             "ner_model_configuration": {
-                "model_to_presidio_entity_mapping": {
-                    "PER": "PERSON",
-                    "GPE": "LOCATION",
-                    "ORG": "ORGANIZATION",
-                    "MISC": "NRP",
-                },
+                "model_to_presidio_entity_mapping": NER_LABEL_MAPPING,
                 "labels_to_ignore": ["O"],
             },
         }
 
-        require_spacy_models(detection_profile)
+        require_spacy_models(detection_profile, [language])
         try:
             nlp_engine = NlpEngineProvider(nlp_configuration=conf).create_engine()
         except SystemExit as e:
@@ -117,6 +149,29 @@ class Anonymizer:
         self.language = language
         self.detection_profile = detection_profile
         self.model_map = selected_models
+
+    @classmethod
+    def for_regex_only(cls, language="en", detection_profile="thorough"):
+        """An Anonymizer with no spaCy engine, for regex-only work.
+
+        The GUI runs detection in a child process (spaCy holds the GIL, which
+        would freeze Qt). The parent still needs an object that can load reviewed
+        keys and rewrite text; that path is pure regex and needs no model.
+        """
+        instance = cls.__new__(cls)
+        instance.language = language
+        instance.detection_profile = detection_profile
+        instance.model_map = {}
+        instance.entities = Config()
+        instance.counts = dict.fromkeys(
+            [
+                f"{entity.category}_{suffix}"
+                for entity in entity_types.ENTITY_TYPES
+                for suffix in ("found", "replaced")
+            ],
+            0,
+        )
+        return instance
 
     def detect_entities(self, texts: list):
         """Detect entities in multiple texts using Presidio."""

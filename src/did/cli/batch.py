@@ -32,9 +32,9 @@ from ..core.anonymizer import Anonymizer
 from ..core.entity_types import DOCUMENT_TITLE
 from ..core.verification import TOKEN_RE, verify
 from ..utils.console import console, print_counts, print_verification
-from ..utils.file_utils import export_to_typst, extract_text
+from ..utils.file_utils import SUPPORTED_SUFFIXES, export_to_typst, read_document
 
-TYPST_INPUT_SUFFIXES = (".md", ".txt", ".pdf", ".docx")
+TYPST_INPUT_SUFFIXES = SUPPORTED_SUFFIXES
 
 
 def _token_ids(body: str) -> set:
@@ -105,7 +105,14 @@ def batch(files, output, language, combine):
             f"[bold]Step 1:[/bold] Detecting entities across {len(inputs)} document(s)..."
         )
         anonymizer = Anonymizer(language=language)
-        texts = [extract_text(p) for p in inputs]
+        readings = [read_document(p) for p in inputs]
+        unreadable = [reading.path.name for reading in readings if not reading.readable]
+        if unreadable:
+            console.print(
+                "[red]Error:[/red] No readable text in " + ", ".join(unreadable)
+            )
+            sys.exit(1)
+        texts = [reading.text for reading in readings]
         anonymizer.detect_entities(texts)
 
         console.print("[bold]Detected entities:[/bold]")
@@ -152,6 +159,7 @@ def batch(files, output, language, combine):
                 vars_filename=str(shared_vars),
                 fakevars_filename=str(shared_fakevars),
                 write_imports=False,
+                source_text=readings[index - 1].text,
             )
             body = doc_out.read_text(encoding="utf-8").strip()
             bodies.append((f"#({DOCUMENT_TITLE.prefix}{index}V1)", body))
@@ -235,7 +243,10 @@ batch_cmd = command(
             name="files",
             arg_type=str,
             nargs="+",
-            help="Input documents and/or directories (.md, .txt, .pdf, .docx).",
+            help=(
+                "Input documents and/or directories (.pdf, .docx, and common text "
+                "formats such as .md, .txt, .tex, .html, .csv)."
+            ),
             sort_key=0,
         ),
     ],
@@ -251,7 +262,7 @@ batch_cmd = command(
             flags=["--language", "-l"],
             arg_type=str,
             default="en",
-            help="Language for entity detection (e.g., 'en', 'da')",
+            help="Language for entity detection (e.g., 'en', 'da', 'sv')",
             sort_key=1,
         ),
         option(

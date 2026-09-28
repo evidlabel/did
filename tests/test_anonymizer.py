@@ -32,6 +32,67 @@ def test_detection_preserves_reported_confidence():
     assert detector.entities.person[0].confidence == 0.873
 
 
+def test_short_fragments_are_not_organizations():
+    from did.core.detection import keep_named_entity
+
+    assert keep_named_entity("organization", "s") is False
+    assert keep_named_entity("organization", "Cc") is False
+    assert keep_named_entity("organization", "Ett") is False
+    assert keep_named_entity("organization", "SVT") is True
+    assert keep_named_entity("organization", "CEST") is True
+    assert keep_named_entity("organization", "Volvo") is True
+    assert keep_named_entity("location", "Åre") is True
+
+
+def test_swedish_uses_its_own_spacy_models():
+    from did.core.anonymizer import NER_LABEL_MAPPING, SPACY_MODELS
+
+    assert SPACY_MODELS["thorough"]["sv"] == "sv_core_news_lg"
+    assert SPACY_MODELS["balanced"]["sv"] == "sv_core_news_sm"
+    assert NER_LABEL_MAPPING["PRS"] == "PERSON"
+    assert NER_LABEL_MAPPING["LOC"] == "LOCATION"
+    assert NER_LABEL_MAPPING["TME"] == "DATE_TIME"
+
+
+def test_swedish_model_detects_person_and_place():
+    anonymizer = Anonymizer(language="sv")
+    anonymizer.detect_entities(["Anna Andersson bor i Göteborg och arbetar på Volvo."])
+    people = [
+        variant for entity in anonymizer.entities.person for variant in entity.variants
+    ]
+    places = [
+        variant
+        for entity in anonymizer.entities.location
+        for variant in entity.variants
+    ]
+    assert "Anna Andersson" in people
+    assert "Göteborg" in places
+
+
+def test_unsupported_language_is_rejected():
+    with pytest.raises(ValueError, match="Unsupported language"):
+        Anonymizer(language="xx")
+
+
+def test_only_the_document_language_and_english_are_required(monkeypatch):
+    from did.core import anonymizer as module
+
+    installed = {"da_core_news_lg", "en_core_web_md"}
+    monkeypatch.setattr("spacy.util.is_package", lambda name: name in installed)
+
+    assert module.models_for("da") == {
+        "da": "da_core_news_lg",
+        "en": "en_core_web_md",
+    }
+    assert module.models_for("en") == {"en": "en_core_web_md"}
+    assert module.missing_spacy_models("thorough", ["da"]) == []
+    assert module.missing_spacy_models("thorough", ["sv"]) == ["sv_core_news_lg"]
+    assert module.missing_spacy_models() == ["sv_core_news_lg"]
+    module.require_spacy_models("thorough", ["da"])
+    with pytest.raises(ValueError, match="sv_core_news_lg"):
+        module.require_spacy_models("thorough", ["sv"])
+
+
 def test_missing_spacy_models_do_not_invoke_pip(monkeypatch):
     """Presidio must not `python -m pip` when models are absent.
 
@@ -49,7 +110,7 @@ def test_missing_spacy_models_do_not_invoke_pip(monkeypatch):
 
     monkeypatch.setattr(spacy.cli, "download", fake_download)
 
-    with pytest.raises(ValueError, match="uv sync --extra models"):
+    with pytest.raises(ValueError, match="did models"):
         Anonymizer(language="en")
     assert download_calls == []
 

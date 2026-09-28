@@ -2,27 +2,24 @@
 
 import sys
 
-from PySide6.QtWidgets import QApplication, QMessageBox
-
-from did.core.anonymizer import MODELS_INSTALL_HINT, missing_spacy_models
-
-from .gui.theme import apply_theme
-from .gui.window import MainWindow
+from .display import NO_DISPLAY_MESSAGE, configure_display
 
 
 def main():
+    # Before Qt loads: a missing display must be a message, not an abort.
+    if not configure_display():
+        print(NO_DISPLAY_MESSAGE, file=sys.stderr)
+        sys.exit(1)
+
+    from PySide6.QtWidgets import QApplication
+
+    from .gui.theme import apply_theme
+    from .gui.window import MainWindow
+
+    # No model check here: browsing needs none, and the first detection in a
+    # language downloads the model it needs (did.core.model_install).
     app = QApplication(sys.argv)
     apply_theme(app)
-    missing = missing_spacy_models()
-    if missing:
-        QMessageBox.critical(
-            None,
-            "Missing language models",
-            "DID needs spaCy models to detect entities:\n\n"
-            + "\n".join(f"• {name}" for name in missing)
-            + f"\n\nInstall them with:\n{MODELS_INSTALL_HINT}",
-        )
-        return 1
     window = MainWindow()
     window.showMaximized()
     sys.exit(app.exec())

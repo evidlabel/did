@@ -35,7 +35,7 @@ PREVIEW_MONO.setStyleStrategy(
 )
 
 PREVIEW_TOKEN_RE = re.compile(
-    rf"#\(({entity_types.prefix_pattern()})(\d+)V\d+\)"
+    rf"#\(({entity_types.prefix_pattern()})(\d+)V(\d+)\)"
     r"|\[("
     + "|".join(sorted(set(pipeline.PLACEHOLDER_WORDS.values()), key=len, reverse=True))
     + r") (\d+)\]"
@@ -61,10 +61,11 @@ _PREVIEW_STATES = {
 
 
 def token_at_position(text: str, position: int):
-    """Return ``(entity_type, possible_ids)`` for the token under *position*.
+    """Return ``(entity_type, number, variant)`` for the token under *position*.
 
-    *possible_ids* covers both compact (``P1``) and expanded (``PERSON_1``)
-    identity forms so callers can match either encoding in the entity table.
+    ``number`` is the identity's 1-based position within its type — tokens are
+    positional, not tied to the YAML ``id``. ``variant`` is the 1-based variant
+    index, or ``None`` for written-out ``[PERSON 1]`` labels that omit it.
     """
     match = next(
         (
@@ -76,13 +77,10 @@ def token_at_position(text: str, position: int):
     )
     if match is None:
         return None
-    prefix, token_number, word, written_number = match.groups()
-    number = token_number or written_number
+    prefix, token_number, variant, word, written_number = match.groups()
+    number = int(token_number or written_number)
     entity_type = PREFIX_ENTITY_TYPE[prefix] if prefix else WORD_ENTITY_TYPE[word]
-    possible_ids = {f"{entity_type}_{number}"}
-    if prefix:
-        possible_ids.add(f"{prefix}{number}")
-    return entity_type, possible_ids
+    return entity_type, number, int(variant) if variant else None
 
 
 class PreviewEdit(QPlainTextEdit):

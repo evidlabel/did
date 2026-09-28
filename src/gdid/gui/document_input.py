@@ -13,9 +13,13 @@ from PySide6.QtWidgets import QFileDialog, QTreeWidget
 from .. import pipeline
 from .project_tree import ROLE_DOCUMENT_PATH, ROLE_PROJECT_PATH, select_document_item
 
-DOCUMENT_FILE_FILTER = "Documents (*.pdf *.docx *.md *.txt *.zip);;All files (*)"
-NO_DOCUMENTS_STATUS = "No supported documents found (.pdf, .docx, .md, .txt)."
-NO_NEW_DOCUMENTS_STATUS = "No new supported documents found (.pdf, .docx, .md, .txt)."
+DOCUMENT_FILE_FILTER = (
+    "Documents (*.pdf *.docx *.md *.markdown *.txt *.tex *.bib *.rtf *.html *.htm "
+    "*.csv *.tsv *.json *.yaml *.yml *.xml *.log *.rst *.org *.srt *.vtt *.zip);;"
+    "All files (*)"
+)
+NO_DOCUMENTS_STATUS = "No supported documents found."
+NO_NEW_DOCUMENTS_STATUS = "No new supported documents found."
 
 
 def choose_document_paths(parent, start_directory: str = "") -> list[Path]:
@@ -37,7 +41,7 @@ def collect_document_additions(
     *additions* are newly discovered inputs not already in *existing_files*.
     *all_files* is the expanded list from *paths* only (not merged with existing).
     """
-    files, temp_dirs = pipeline.collect_inputs(paths)
+    files, temp_dirs = pipeline.collect_inputs(paths, allow_unknown=True)
     existing = {Path(path) for path in existing_files}
     additions = [path for path in files if path not in existing]
     return additions, files, temp_dirs

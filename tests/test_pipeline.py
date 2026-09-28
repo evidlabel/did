@@ -65,11 +65,25 @@ def test_collect_inputs_single_files(tmp_path):
     assert temp_dirs == []
 
 
+def test_collect_inputs_accepts_an_explicit_unknown_file(tmp_path):
+    odd = tmp_path / "note.widget"
+    odd.write_text("x", encoding="utf-8")
+    files, _ = pipeline.collect_inputs([str(odd)], allow_unknown=True)
+    assert files == [odd]
+
+
+def test_collect_inputs_directory_still_filters_unknown_extensions(tmp_path):
+    (tmp_path / "a.md").write_text("x", encoding="utf-8")
+    (tmp_path / "b.widget").write_text("x", encoding="utf-8")
+    files, _ = pipeline.collect_inputs([str(tmp_path)])
+    assert [f.name for f in files] == ["a.md"]
+
+
 # ----------------------------------------------------------------- extract_one ---
 def test_extract_one_md(tmp_path):
     f = tmp_path / "a.md"
     f.write_text("# Heading\nbody text")
-    text = pipeline.extract_one(f)
+    text = pipeline.extract_one(f).text
     assert "Heading" in text
     assert "body text" in text
 
@@ -77,7 +91,7 @@ def test_extract_one_md(tmp_path):
 def test_extract_one_txt(tmp_path):
     f = tmp_path / "a.txt"
     f.write_text("plain content")
-    assert pipeline.extract_one(f) == "plain content"
+    assert pipeline.extract_one(f).text == "plain content"
 
 
 def test_extract_one_docx(tmp_path):
@@ -86,7 +100,7 @@ def test_extract_one_docx(tmp_path):
     document.add_paragraph("Dear John Doe")
     document.save(path)
 
-    assert pipeline.extract_one(path) == "Dear John Doe"
+    assert pipeline.extract_one(path).text == "Dear John Doe"
 
 
 # --------------------------------------------------------------- detect_to_yaml ---
@@ -107,7 +121,9 @@ def test_pseudonymize_all_maps_each_text():
     texts = {"doc1": "John Doe met X.", "doc2": "Hi John Doe."}
     result = pipeline.pseudonymize_all(anonymizer, "PERSON: []", texts)
     assert result == {"doc1": "#(P1V1) met X.", "doc2": "Hi #(P1V1)."}
-    assert anonymizer.loaded is not None  # load_replacements was called
+    # Replacements load into a copy; the caller's instance is left untouched
+    # so a worker thread never changes the anonymizer the window exports with.
+    assert anonymizer.loaded is None
 
 
 def test_pseudonymize_all_rejects_bad_yaml():
@@ -172,7 +188,8 @@ def test_exclude_not_names_removes_matching_person_identity():
     filtered = pipeline.exclude_not_names(yaml_text, ["virksomhedstype"])
     data = pipeline.parse_yaml(filtered)
 
-    assert [entity["id"] for entity in data["PERSON"]] == ["PERSON_2"]
+    # Ids follow position, which is what the #(P1V1) tokens encode.
+    assert [entity["id"] for entity in data["PERSON"]] == ["PERSON_1"]
     assert data["PERSON"][0]["variants"] == ["Jane Doe"]
 
 
@@ -206,7 +223,7 @@ def test_merge_person_entities_moves_whole_identity():
     people = pipeline.parse_yaml(merged)["PERSON"]
 
     assert len(people) == 1
-    assert people[0]["id"] == "PERSON_2"
+    assert people[0]["id"] == "PERSON_1"
     assert people[0]["variants"] == ["John Doe", "J. Doe"]
 
 
@@ -275,6 +292,108 @@ def test_save_outputs_single_combines(tmp_path, monkeypatch):
     assert all(kwargs.get("write_imports") is False for _, _, kwargs in calls)
 
 
+def test_save_outputs_pdf_compiles_one_pdf_per_document(tmp_path, monkeypatch):
+    _stub_export(monkeypatch)
+    compiled = []
+
+    def fake_compile(main_typ, pdf_path):
+        compiled.append((main_typ.name, pdf_path.name))
+        pdf_path.write_bytes(b"%PDF-1.7\n")
+
+    monkeypatch.setattr(pipeline, "compile_typst_pdf", fake_compile)
+    files = [tmp_path / "a.md", tmp_path / "b.md"]
+    for f in files:
+        f.write_text("x")
+
+    sub = pipeline.save_outputs(files, FakeAnonymizer(), "PERSON: []", "pdf", tmp_path)
+
+    assert sub == tmp_path / "pseudonymized_pdf"
+    assert (sub / "a_pseudo.pdf").read_bytes().startswith(b"%PDF")
+    assert (sub / "b_pseudo.pdf").exists()
+    assert [pdf for _, pdf in compiled] == ["a_pseudo.pdf", "b_pseudo.pdf"]
+    # The Typst sources (which import the real-value vars file) must not survive.
+    assert not list(sub.glob("*.typ"))
+
+
+def test_compile_typst_pdf_reports_a_missing_typst(tmp_path, monkeypatch):
+    from did.utils import file_utils
+
+    def missing(*_args, **_kwargs):
+        raise FileNotFoundError("typst")
+
+    monkeypatch.setattr(file_utils.subprocess, "run", missing)
+    with pytest.raises(ValueError, match="typst"):
+        file_utils.compile_typst_pdf(tmp_path / "a.typ", tmp_path / "a.pdf")
+
+
+def test_compile_typst_pdf_renders_a_real_pdf(tmp_path):
+    import shutil
+
+    from did.utils.file_utils import compile_typst_pdf
+
+    if shutil.which("typst") is None:
+        pytest.skip("typst is not installed")
+    source = tmp_path / "a.typ"
+    source.write_text("= Hello\n\nBody.\n", encoding="utf-8")
+    output = tmp_path / "a.pdf"
+
+    compile_typst_pdf(source, output)
+
+    assert output.read_bytes().startswith(b"%PDF")
+
+
+def test_fragment_organizations_are_removed_from_a_review():
+    review = (
+        "ORGANIZATION:\n"
+        '  - id: "ORGANIZATION_1"\n'
+        "    variants:\n"
+        '      - "Volvo"\n'
+        '      - "s"\n'
+        '  - id: "ORGANIZATION_2"\n'
+        "    variants:\n"
+        '      - "Ett"\n'
+    )
+    cleaned = pipeline.drop_fragment_organizations(review)
+    assert "Volvo" in cleaned
+    assert '\n      - "s"\n' not in cleaned and '- "s"' not in cleaned
+    assert "Ett" not in cleaned
+
+
+def test_review_matches_only_the_reading_it_was_stamped_with(tmp_path):
+    from hashlib import sha256
+
+    from did.utils.file_utils import Reading
+
+    path = tmp_path / "mail.pdf"
+    text = "Hej Anna Andersson"
+    reading = Reading(path, text, "ocr", sha256(text.encode()).hexdigest(), True)
+    other = Reading(path, text + " mer", "ocr", sha256(b"other").hexdigest(), True)
+    review = pipeline.stamp_reading(
+        'PERSON:\n  - id: "PERSON_1"\n    variants: ["Anna Andersson"]\n',
+        pipeline.readings_digest({path: reading}),
+    )
+    assert pipeline.review_matches_readings(review, {path: reading})
+    assert pipeline.review_matches_readings(review, {path: other}) is False
+    unstamped = 'PERSON:\n  - id: "PERSON_1"\n    variants: ["Anna Andersson"]\n'
+    assert pipeline.review_matches_readings(unstamped, {path: reading}) is False
+
+
+def test_save_outputs_passes_the_loaded_text(tmp_path, monkeypatch):
+    calls = _stub_export(monkeypatch)
+    source = tmp_path / "mail.pdf"
+    source.write_text("unused")
+    loaded = "Hej Anna Andersson"
+    pipeline.save_outputs(
+        [source],
+        FakeAnonymizer(),
+        "PERSON: []",
+        "multi",
+        tmp_path,
+        source_texts={source: loaded},
+    )
+    assert calls[0][2]["source_text"] == loaded
+
+
 def test_save_outputs_bad_mode(tmp_path):
     with pytest.raises(ValueError, match="Unknown save mode"):
         pipeline.save_outputs([], FakeAnonymizer(), "x", "weird", tmp_path)
@@ -333,3 +452,161 @@ def test_to_synthetic_is_stable_and_groups_variants():
     repeated, _ = remainder.split(" and ", 1)
     assert left == repeated
     assert values
+
+
+def test_to_synthetic_swedish_uses_a_different_locale_than_english():
+    yaml_text = 'PERSON:\n  - id: "PERSON_1"\n    variants: ["Anna"]\n'
+    text = "#(P1V1)."
+    swedish = pipeline.to_synthetic(text, yaml_text, "sv", "case")
+    english = pipeline.to_synthetic(text, yaml_text, "en", "case")
+    assert swedish != english
+    assert "#(P1V1)" not in swedish
+
+
+# ------------------------------------------------------ positional token keys ---
+def _regex_anonymizer():
+    """A real Anonymizer without spaCy: enough for load_replacements/anonymize."""
+    from did.core import entity_types
+    from did.core.anonymizer import Anonymizer
+    from did.core.models import Config
+
+    anonymizer = Anonymizer.__new__(Anonymizer)
+    anonymizer.counts = dict.fromkeys(
+        [
+            f"{entity.category}_{suffix}"
+            for entity in entity_types.ENTITY_TYPES
+            for suffix in ("found", "replaced")
+        ],
+        0,
+    )
+    anonymizer.entities = Config()
+    return anonymizer
+
+
+_DIVERGED_IDS = (
+    "PERSON:\n"
+    '  - id: "PERSON_1"\n'
+    '    variants: ["Ann Lee"]\n'
+    '  - id: "PERSON_3"\n'
+    '    variants: ["Bo Dahl", "B. Dahl"]\n'
+)
+
+
+def test_tokens_are_positional_so_lookups_follow_position():
+    anonymized = pipeline.pseudonymize_all(
+        _regex_anonymizer(), _DIVERGED_IDS, {"d": "Ann Lee met Bo Dahl."}
+    )
+    # The second PERSON is P2 even though its id says PERSON_3.
+    assert anonymized["d"] == "#(P1V1) met #(P2V1)."
+    assert (
+        pipeline.resolve_selection_placeholders("#(P2V2) arrived", _DIVERGED_IDS)
+        == "B. Dahl arrived"
+    )
+    synthetic = pipeline.to_synthetic("#(P2V1)", _DIVERGED_IDS, "en", "seed")
+    assert "#(" not in synthetic
+
+
+def test_review_edits_renumber_ids_to_token_positions():
+    excluded = pipeline.exclude_not_names(
+        "PERSON:\n"
+        '  - id: "PERSON_1"\n    variants: ["Ann Lee"]\n'
+        '  - id: "PERSON_2"\n    variants: ["Bo Dahl"]\n'
+        '  - id: "PERSON_3"\n    variants: ["Cy Moe"]\n',
+        ["Bo Dahl"],
+    )
+    people = pipeline.parse_yaml(excluded)["PERSON"]
+    assert [(p["id"], p["variants"][0]) for p in people] == [
+        ("PERSON_1", "Ann Lee"),
+        ("PERSON_2", "Cy Moe"),
+    ]
+
+    moved = pipeline.change_entity_types(excluded, {"PERSON_1"}, "ORGANIZATION")
+    data = pipeline.parse_yaml(moved)
+    assert [p["id"] for p in data["PERSON"]] == ["PERSON_1"]
+    assert [o["id"] for o in data["ORGANIZATION"]] == ["ORGANIZATION_1"]
+
+    added = pipeline.add_entity(_DIVERGED_IDS, "Di Ek")
+    assert [p["id"] for p in pipeline.parse_yaml(added)["PERSON"]] == [
+        "PERSON_1",
+        "PERSON_2",
+        "PERSON_3",
+    ]
+
+
+def test_merge_review_keeps_review_and_appends_only_new_identities():
+    review = (
+        "PERSON:\n"
+        '  - id: "PERSON_1"\n    variants: ["John Doe", "J. Doe"]\n'
+        '  - id: "PERSON_2"\n    variants: ["Jane Roe"]\n'
+        "_reading: old\n"
+    )
+    detected = (
+        "PERSON:\n"
+        '  - id: "PERSON_1"\n    variants: ["J. Doe"]\n'
+        '  - id: "PERSON_2"\n    variants: ["Max Mo"]\n'
+        "ORGANIZATION:\n"
+        '  - id: "ORGANIZATION_1"\n    variants: ["Jane Roe"]\n'
+        "_reading: new\n"
+    )
+    merged, kept, added = pipeline.merge_review(review, detected)
+    data = pipeline.parse_yaml(merged)
+
+    assert (kept, added) == (2, 1)
+    assert [p["variants"] for p in data["PERSON"]] == [
+        ["John Doe", "J. Doe"],
+        ["Jane Roe"],
+        ["Max Mo"],
+    ]
+    assert [p["id"] for p in data["PERSON"]] == ["PERSON_1", "PERSON_2", "PERSON_3"]
+    # "Jane Roe" is already reviewed as a PERSON; the ORGANIZATION guess is dropped.
+    assert not data.get("ORGANIZATION")
+    assert data["_reading"] == "new"
+
+
+def test_count_identities_ignores_invalid_and_non_list_keys():
+    assert pipeline.count_identities(_DIVERGED_IDS + "_reading: abc\n") == 2
+    assert pipeline.count_identities("") == 0
+    assert pipeline.count_identities("key: [unclosed") == 0
+
+
+def test_save_version_outputs_uses_the_yaml_not_stale_anonymizer_state(tmp_path):
+    source = tmp_path / "a.md"
+    source.write_text("Ann Lee met Bo Dahl.", encoding="utf-8")
+    anonymizer = _regex_anonymizer()
+    # The anonymizer still holds older keys (only Ann Lee) …
+    anonymizer.load_replacements(
+        pipeline.parse_yaml('PERSON:\n  - id: "PERSON_1"\n    variants: ["Ann Lee"]\n')
+    )
+    stage = tmp_path / "stage"
+    (stage / "output").mkdir(parents=True)
+
+    output = pipeline.save_version_outputs(
+        [source], anonymizer, _DIVERGED_IDS, "multi", stage
+    )
+
+    # … but the version is written from the YAML it snapshots.
+    body = (output / "a_pseudonymized.typ").read_text(encoding="utf-8")
+    assert "#(P2V1)" in body and "Bo Dahl" not in body
+    assert not (output / "config.yaml").exists()
+    assert len(anonymizer.entities.person) == 1  # caller's instance untouched
+
+
+def test_save_version_outputs_pdf_writes_pdfs_only(tmp_path, monkeypatch):
+    source = tmp_path / "a.md"
+    source.write_text("Ann Lee met Bo Dahl.", encoding="utf-8")
+    anonymizer = _regex_anonymizer()
+    monkeypatch.setattr(
+        pipeline,
+        "compile_typst_pdf",
+        lambda main, pdf: pdf.write_bytes(b"%PDF-1.7\n"),
+    )
+    stage = tmp_path / "stage"
+    (stage / "output").mkdir(parents=True)
+
+    output = pipeline.save_version_outputs(
+        [source], anonymizer, _DIVERGED_IDS, "pdf", stage
+    )
+
+    assert (output / "a_pseudo.pdf").read_bytes().startswith(b"%PDF")
+    assert not (output / "config.yaml").exists()
+    assert not list(output.glob("*.typ"))

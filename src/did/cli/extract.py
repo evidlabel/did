@@ -10,7 +10,7 @@ from treeparse import argument, command, option
 
 from ..core.anonymizer import Anonymizer
 from ..utils.console import console, print_counts
-from ..utils.file_utils import extract_text
+from ..utils.file_utils import read_document
 
 
 def extract(files, config, language):
@@ -25,7 +25,7 @@ def extract(files, config, language):
         texts = []
         for input_file in files:
             file_path = Path(input_file)
-            text = extract_text(file_path)
+            text = read_document(file_path).text
             texts.append(text)
 
         with console.status(
@@ -75,7 +75,7 @@ extract_cmd = command(
             flags=["--language", "-l"],
             arg_type=str,
             default="en",
-            help="Language for entity detection (e.g., 'en', 'da')",
+            help="Language for entity detection (e.g., 'en', 'da', 'sv')",
             sort_key=1,
         ),
     ],

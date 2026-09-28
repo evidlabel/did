@@ -6,11 +6,16 @@ The slow spaCy-backed Anonymizer is replaced by a fake factory throughout.
 """
 
 import os
+from pathlib import Path
 
 import pytest
 
 pytest.importorskip("PySide6")
 from PySide6.QtCore import Qt
+
+from gdid import pipeline
+from gdid.gui.entity_panel import ROLE_ENTITY_TYPE, ROLE_TOKEN_INDEX, ROLE_VARIANT
+from gdid.gui.project_tree import ROLE_PROJECT_KIND
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -53,6 +58,14 @@ def _make_window(qapp):
     return MainWindow(anonymizer_factory=FakeAnonymizer)
 
 
+def _as_reading(path, text, readable=True):
+    from hashlib import sha256
+
+    from did.utils.file_utils import Reading
+
+    return Reading(path, text, "native", sha256(text.encode()).hexdigest(), readable)
+
+
 class MemorySettings:
     def __init__(self, recent=None):
         self.recent = list(recent or [])
@@ -83,6 +96,57 @@ class MemorySettings:
 def test_window_builds(qapp):
     w = _make_window(qapp)
     assert "DID" in w.windowTitle()
+    assert w.lang_combo.findData("sv") >= 0
+
+
+def test_create_version_menu_offers_pdf_output(qapp):
+    w = _make_window(qapp)
+    labels = [action.text() for action in w.save_button.menu().actions()]
+    assert any("PDF" in label for label in labels)
+    w.close()
+
+
+def test_language_change_is_reloaded_with_the_project(qapp, tmp_path):
+    from gdid.gui.window import MainWindow
+    from gdid.project import Project, create_project_workdir, load_project
+
+    project_path = create_project_workdir(Project(name="Arende"), tmp_path, "case")
+    w = MainWindow(anonymizer_factory=FakeAnonymizer, settings=MemorySettings())
+    assert w._open_project_path(project_path)
+    assert w._language == "da"
+    w.lang_combo.setCurrentIndex(w.lang_combo.findData("sv"))
+    assert load_project(project_path).language == "sv"
+    w.close()
+
+    reopened = MainWindow(
+        anonymizer_factory=FakeAnonymizer, settings=MemorySettings([project_path])
+    )
+    assert reopened._open_project_path(project_path)
+    assert reopened._language == "sv"
+    assert reopened.lang_combo.currentData() == "sv"
+    reopened.close()
+
+
+def test_new_project_keeps_swedish_for_detection(qapp, tmp_path):
+    from gdid.gui.window import MainWindow
+    from gdid.project import load_project
+
+    w = MainWindow(anonymizer_factory=FakeAnonymizer, settings=MemorySettings())
+    w.lang_combo.setCurrentIndex(w.lang_combo.findData("sv"))
+    w._on_new_project(name="Arende", parent=str(tmp_path))
+    assert w.lang_combo.currentData() == "sv"
+    assert w._project.language == "sv"
+    assert load_project(w._project.project_file).language == "sv"
+
+    w._language = "da"
+    letter = tmp_path / "letter.md"
+    w._readings = {letter: _as_reading(letter, "Hej Anna")}
+    w._on_anonymize()
+    worker = w._workers[-1]
+    assert worker._language == "sv"
+    assert w._language == "sv"
+    worker.wait(5000)
+    w.close()
     assert w.anon_action.isEnabled() is False
     assert w.save_button.isEnabled() is False
     w.close()
@@ -273,7 +337,9 @@ def test_load_paths_populates_file_list(qapp, tmp_path):
     w._project = Project(source_paths=[a, b])
     w._load_paths([str(a), str(b)])
     project = w.project_tree.topLevelItem(0)
-    assert project.child(0).childCount() == 2
+    draft = project.child(0)
+    kinds = [draft.child(i).data(0, ROLE_PROJECT_KIND) for i in range(3)]
+    assert kinds == ["draft_document", "draft_document", "draft_keys"]
     w.close()
 
 
@@ -283,7 +349,7 @@ def test_on_anonymized_wires_up_state(qapp, tmp_path):
     w = _make_window(qapp)
     w._files = [a]
     w._selected_file = a
-    w._extracted = {a: "John Doe."}
+    w._readings = {a: _as_reading(a, "John Doe.")}
     w._refresh_actions()
     assert w.anon_action.isEnabled() is True
 
@@ -303,7 +369,7 @@ def test_anonymized_result_immediately_refreshes_preview(qapp, tmp_path):
     w._files = [a]
     w._project = Project(source_paths=[a])
     w._selected_file = a
-    w._extracted = {a: "John Doe."}
+    w._readings = {a: _as_reading(a, "John Doe.")}
     w._refresh_file_list()
 
     fake = FakeAnonymizer()
@@ -336,8 +402,12 @@ def test_project_tree_shows_draft_documents_and_missing_sources(qapp, tmp_path):
     assert [draft.child(i).text(0) for i in range(draft.childCount())] == [
         "○ verdict.md",
         "! missing-opinion.md",
+        "Keys · entities.yaml (0)",
     ]
     assert draft.child(1).isDisabled()
+    keys = draft.child(2)
+    assert keys.text(1) == "KEYS"
+    assert str(project_path.parent / "draft" / "entities.yaml") in keys.toolTip(0)
     w.close()
 
 
@@ -348,7 +418,7 @@ def test_project_tree_versions_hide_identity_support_files(qapp, tmp_path):
     from gdid.project import Project, save_project
 
     project_path = save_project(Project(name="Appeal"), tmp_path / "appeal")
-    version = project_path.parent / "versions" / "v001"
+    version = project_path.parent / "versions" / "output"
     output = version / "output"
     output.mkdir(parents=True)
     (output / "verdict_pseudonymized.typ").write_text("safe", encoding="utf-8")
@@ -356,7 +426,7 @@ def test_project_tree_versions_hide_identity_support_files(qapp, tmp_path):
     (output / "shared_vars.typ").write_text("#let P1 = x", encoding="utf-8")
     (output / "shared_fakevars.typ").write_text("#let P1 = fake", encoding="utf-8")
     (version / "manifest.json").write_text(
-        json.dumps({"number": 1, "version_id": "v001"}), encoding="utf-8"
+        json.dumps({"number": 1, "version_id": "output"}), encoding="utf-8"
     )
     w = MainWindow(
         anonymizer_factory=FakeAnonymizer,
@@ -364,9 +434,13 @@ def test_project_tree_versions_hide_identity_support_files(qapp, tmp_path):
     )
 
     version_item = w.project_tree.topLevelItem(0).child(1)
-    assert version_item.text(0) == "✓ v001"
-    assert version_item.childCount() == 1
-    assert version_item.child(0).text(0) == "✓ verdict_pseudonymized.typ"
+    assert version_item.text(0) == "✓ Output"
+    assert version_item.childCount() == 2
+    # A version from before entities.yaml existed shows its output/config.yaml
+    # as the keys that produced it; the file never appears as a document.
+    assert version_item.child(0).text(0) == "Keys · output/config.yaml (0)"
+    assert version_item.child(0).data(0, ROLE_PROJECT_KIND) == "version_keys"
+    assert version_item.child(1).text(0) == "✓ verdict_pseudonymized.typ"
     assert version_item.text(1) == "PSEUDO/FAKE"
     w.close()
 
@@ -409,7 +483,7 @@ def test_clicking_pseudo_badge_keeps_document_focused(qapp, tmp_path):
     w._project = Project(source_paths=[source])
     w._files = [source]
     w._selected_file = source
-    w._extracted = {source: "John Doe"}
+    w._readings = {source: _as_reading(source, "John Doe")}
     w._anonymized = {source: "#(P1V1)"}
     w._refresh_project_tree()
     project = w.project_tree.topLevelItem(0)
@@ -605,15 +679,16 @@ def test_entity_details_show_full_untruncated_variants(qapp):
     w.close()
 
 
-def test_entity_table_prioritizes_variants_and_compacts_repeated_id(qapp):
+def test_entity_table_shows_token_key_not_yaml_id(qapp):
     w = _make_window(qapp)
     w.yaml_edit.setPlainText(
         'PERSON:\n  - id: "PERSON_42"\n    variants: ["Jane Doe"]\n'
     )
 
+    # Tokens are positional: the first PERSON is #(P1V…) whatever its id says.
     assert w.entity_table.horizontalHeaderItem(1).text() == "#"
-    assert w.entity_table.item(0, 1).text() == "42"
-    assert w.entity_table.item(0, 1).toolTip() == "PERSON_42"
+    assert w.entity_table.item(0, 1).text() == "P1"
+    assert "PERSON_42" in w.entity_table.item(0, 1).toolTip()
     header = w.entity_table.horizontalHeader()
     assert header.sectionSize(0) == 104
     assert header.sectionSize(1) == 52
@@ -923,8 +998,8 @@ def test_extract_worker_emits_finished(qapp, tmp_path):
     assert errors == []
     assert len(results) == 1
     extracted = results[0]
-    assert "alpha" in extracted[a]
-    assert "beta" in extracted[b]
+    assert extracted[a].text == "alpha"
+    assert extracted[b].text == "beta"
 
 
 def test_anonymize_worker_emits_finished(qapp):
@@ -990,7 +1065,7 @@ def test_anonymize_worker_systemexit_emits_error_instead_of_crashing(qapp):
 
     assert finished
     assert errors, "SystemExit escaped QThread.run"
-    assert "uv sync --extra models" in errors[0]
+    assert "did models" in errors[0]
 
 
 def test_pseudo_worker_emits_a_verification_report(qapp):
@@ -1034,7 +1109,10 @@ def _window_with_anonymized(qapp, tmp_path):
     w = _make_window(qapp)
     w._files = [a, b]
     w._selected_file = a
-    w._extracted = {a: "John Doe one.", b: "John Doe two."}
+    w._readings = {
+        a: _as_reading(a, "John Doe one."),
+        b: _as_reading(b, "John Doe two."),
+    }
     w._anonymized = {a: "#(P1V1) one.", b: "#(P1V1) two."}
     w._refresh_file_list()
     return w, a, b
@@ -1064,9 +1142,9 @@ def test_copy_all_concatenates_with_headings(qapp, tmp_path):
 def test_copy_menu_enabled_states(qapp, tmp_path):
     w, a, _ = _window_with_anonymized(qapp, tmp_path)
     menu = w._copy_menu(a)
-    copy_one, copy_all = (act for act in menu.actions() if not act.isSeparator())
-    assert copy_one.isEnabled() is True
-    assert copy_all.isEnabled() is True
+    by_label = {act.text(): act for act in menu.actions()}
+    assert by_label["Copy document (pseudonymized)"].isEnabled() is True
+    assert by_label["Copy all documents (combined)"].isEnabled() is True
     w.close()
 
 
@@ -1075,17 +1153,79 @@ def test_copy_menu_disabled_before_anonymize(qapp, tmp_path):
     a.write_text("John Doe.")
     w = _make_window(qapp)
     w._files = [a]
-    w._extracted = {a: "John Doe."}
+    w._readings = {a: _as_reading(a, "John Doe.")}
     menu = w._copy_menu(a)
-    copy_one, copy_all = (act for act in menu.actions() if not act.isSeparator())
-    assert copy_one.isEnabled() is False
-    assert copy_all.isEnabled() is False
+    by_label = {act.text(): act for act in menu.actions()}
+    assert by_label["Copy document (pseudonymized)"].isEnabled() is False
+    assert by_label["Copy all documents (combined)"].isEnabled() is False
     w.close()
 
 
 def test_file_list_has_custom_context_menu(qapp):
     w = _make_window(qapp)
     assert w.project_tree.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
+    w.close()
+
+
+def test_remove_project_drops_it_from_the_tree_and_keeps_the_workdir(qapp, tmp_path):
+    from gdid.gui.project_tree import ROLE_PROJECT_KIND, ROLE_PROJECT_PATH
+    from gdid.gui.window import MainWindow
+    from gdid.project import Project, create_project_workdir
+
+    active = create_project_workdir(Project(name="Open case"), tmp_path, "open")
+    other = create_project_workdir(Project(name="Shelf case"), tmp_path, "shelf")
+    settings = MemorySettings([active, other])
+    w = MainWindow(anonymizer_factory=FakeAnonymizer, settings=settings)
+    assert w._open_project_path(active)
+
+    menus = {}
+    for index in range(w.project_tree.topLevelItemCount()):
+        item = w.project_tree.topLevelItem(index)
+        if item.data(0, ROLE_PROJECT_KIND) != "project":
+            continue
+        menu = w._project_tree_menu(item)
+        menus[item.data(0, ROLE_PROJECT_PATH)] = [
+            action.text() for action in menu.actions() if not action.isSeparator()
+        ]
+        remove = next(
+            action for action in menu.actions() if action.text() == "Remove project"
+        )
+        if item.data(0, ROLE_PROJECT_PATH) == str(other):
+            remove.trigger()
+
+    assert "Remove project" in menus[str(active)]
+    assert "Delete project…" in menus[str(active)]
+    assert "Rename project…" in menus[str(active)]
+    assert menus[str(other)] == [
+        "Add documents…",
+        "Remove project",
+        "Delete project…",
+        "Open in file manager",
+    ]
+    assert other.exists()
+    assert other.parent.exists()
+    assert w._project.project_file.resolve() == active
+    assert settings.recent_projects() == [active]
+
+    active_item = next(
+        w.project_tree.topLevelItem(index)
+        for index in range(w.project_tree.topLevelItemCount())
+        if w.project_tree.topLevelItem(index).data(0, ROLE_PROJECT_PATH) == str(active)
+    )
+    remove_active = next(
+        action
+        for action in w._project_tree_menu(active_item).actions()
+        if action.text() == "Remove project"
+    )
+    remove_active.trigger()
+    assert active.exists()
+    assert active.parent.exists()
+    assert w._project is None
+    assert settings.recent_projects() == []
+    assert [
+        w.project_tree.topLevelItem(index).text(0)
+        for index in range(w.project_tree.topLevelItemCount())
+    ] == ["No saved projects"]
     w.close()
 
 
@@ -1102,6 +1242,200 @@ def test_delete_project_removes_workdir_and_active_session(qapp, tmp_path):
     assert not project_path.parent.exists()
     assert settings.recent_projects() == []
     assert w._project is None
+    w.close()
+
+
+def test_stale_review_is_merged_not_applied_as_is(qapp, tmp_path):
+    """A review from another reading is kept, and new detections are added."""
+    from gdid.project import Project
+
+    w = _make_window(qapp)
+    source = tmp_path / "mail.pdf"
+    w._project = Project(name="Case")
+    w._pending_review_yaml = (
+        'PERSON:\n  - id: "PERSON_1"\n    variants: ["K/JLMNO22"]\n'
+    )
+    w._files = [source]
+    w._selected_file = source
+    w._readings = {
+        source: _as_reading(source, "Hej Anna Andersson, kan vi talas vid i Göteborg?")
+    }
+    fresh = 'PERSON:\n  - id: "PERSON_1"\n    variants: ["Anna Andersson"]\n'
+    w._on_anonymized(
+        FakeAnonymizer(),
+        fresh,
+        {source: "#(P1V1), kan vi talas vid i Göteborg?"},
+        None,
+    )
+    _wait_workers(w, qapp)
+    people = pipeline.parse_yaml(w.yaml_edit.toPlainText())["PERSON"]
+    assert [p["variants"] for p in people] == [["K/JLMNO22"], ["Anna Andersson"]]
+    assert "Merged review" in w.status_label.text()
+    w.close()
+
+
+def _wait_workers(w, qapp, rounds=10):
+    """Let chained QThread workers finish and deliver their queued signals."""
+    for _ in range(rounds):
+        running = [worker for worker in w._workers if not worker.isFinished()]
+        for worker in running:
+            worker.wait(10000)
+        qapp.processEvents()
+        if not running and all(worker.isFinished() for worker in w._workers):
+            qapp.processEvents()
+            if all(worker.isFinished() for worker in w._workers):
+                break
+
+
+def test_original_button_shows_source_text(qapp, tmp_path):
+    w, _a, _b = _window_with_anonymized(qapp, tmp_path)
+    w._show_current_preview()
+    assert w.preview.toPlainText() == "#(P1V1) one."
+
+    w.original_button.setChecked(True)
+    assert w.preview.toPlainText() == "John Doe one."
+    assert w.preview_state.text().startswith("RAW")
+
+    w.original_button.setChecked(False)
+    assert w.preview.toPlainText() == "#(P1V1) one."
+    assert "PSEUDONYMIZED" in w.preview_state.text()
+    w.close()
+
+
+def test_published_version_is_shown_as_stored(qapp, tmp_path):
+    from gdid.project import Project
+
+    w, source, _b = _window_with_anonymized(qapp, tmp_path)
+    w._project = Project(name="Case", language="sv")
+    version = tmp_path / "v001"
+    output = version / "output"
+    output.mkdir(parents=True)
+    rendered = output / f"{source.stem}_pseudonymized.typ"
+    stored = "#(GN1V1)" * 60
+    rendered.write_text(stored, encoding="utf-8")
+    (version / "entities.yaml").write_text("PERSON: []\n", encoding="utf-8")
+
+    w._view_version(version)
+    assert rendered.read_text(encoding="utf-8") == stored
+    assert w.preview.toPlainText() == stored
+    w.close()
+
+
+def test_version_preview_can_show_the_source_text(qapp, tmp_path):
+    from gdid.project import Project
+
+    w, _a, _b = _window_with_anonymized(qapp, tmp_path)
+    w._project = Project(name="Case")
+    version = tmp_path / "v001"
+    output = version / "output"
+    output.mkdir(parents=True)
+    rendered = output / "a_pseudonymized.typ"
+    rendered.write_text("#(P1V1) one.", encoding="utf-8")
+    (version / "entities.yaml").write_text("PERSON: []\n", encoding="utf-8")
+
+    w._view_version(version)
+    w._select_document(rendered)
+    assert w.preview.toPlainText() == "#(P1V1) one."
+    w.original_button.setChecked(True)
+    assert w.preview.toPlainText() == "John Doe one."
+    w.original_button.setChecked(False)
+    assert w.preview.toPlainText() == "#(P1V1) one."
+    assert "VERSION" in w.preview_state.text()
+    w.close()
+
+
+def test_version_original_reads_referenced_source_off_the_ui_thread(
+    qapp, tmp_path, monkeypatch
+):
+    from gdid import pipeline
+    from gdid.project import Project
+
+    w, a, _b = _window_with_anonymized(qapp, tmp_path)
+    w._project = Project(name="Case", source_paths=[a])
+    version = tmp_path / "v001"
+    output = version / "output"
+    output.mkdir(parents=True)
+    rendered = output / "a_pseudonymized.typ"
+    rendered.write_text("#(P1V1) one.", encoding="utf-8")
+    (version / "entities.yaml").write_text("PERSON: []\n", encoding="utf-8")
+
+    calls = []
+    real_extract = pipeline.extract_one
+
+    def tracked_extract(path):
+        calls.append(Path(path))
+        return real_extract(path)
+
+    monkeypatch.setattr(pipeline, "extract_one", tracked_extract)
+
+    w._view_version(version)
+    # Reopened project: the draft pane never captured readings for the sources.
+    w._draft_view_state["extracted"] = {}
+    w._refresh_actions()
+    w._select_document(rendered)
+
+    assert w.original_button.isEnabled()
+    w.original_button.setChecked(True)
+
+    # Selection must not read the file on the UI thread; the version text shows
+    # until the background read lands. Other tests' workers may still run, so
+    # assert about this document rather than the whole call list.
+    assert a not in calls
+    assert w.preview.toPlainText() == "#(P1V1) one."
+
+    _wait_workers(w, qapp)
+    qapp.processEvents()
+    assert calls.count(a) == 1
+    assert w.preview.toPlainText() == "John Doe one."
+    w.close()
+
+
+def test_add_variant_without_a_stored_id_uses_the_row_position(qapp, tmp_path):
+    from gdid.project import Project, save_project
+
+    w = _make_window(qapp)
+    project = Project(name="Review")
+    save_project(project, tmp_path / "review")
+    w._project = project
+    w.yaml_edit.setPlainText('PERSON:\n  - variants: ["John Doe"]\n')
+
+    w._add_entity_variant(0, "J. Doe")
+
+    people = pipeline.parse_yaml(w.yaml_edit.toPlainText())["PERSON"]
+    assert people[0]["id"] == "PERSON_1"
+    assert people[0]["variants"] == ["John Doe", "J. Doe"]
+    w.close()
+
+
+def test_worker_error_refreshes_action_state(qapp, tmp_path, monkeypatch):
+    monkeypatch.setattr("gdid.gui.window.QMessageBox.warning", lambda *a, **k: None)
+    w, _a, _b = _window_with_anonymized(qapp, tmp_path)
+    w.original_button.setEnabled(False)
+
+    w._on_worker_error("boom")
+
+    assert w.original_button.isEnabled()
+    assert "ERROR" in w.preview_state.text()
+    w.close()
+
+
+def test_preview_clears_when_nothing_can_be_shown(qapp, tmp_path):
+    w = _make_window(qapp)
+    w.preview.setPlainText("stale text")
+    w._selected_file = None
+    w._show_current_preview()
+    assert w.preview.toPlainText() == ""
+    assert "No document" in w.preview_state.text()
+
+    f = tmp_path / "a.md"
+    w._files = [f]
+    w._selected_file = f
+    w._readings = {}
+    w._anonymized = {}
+    w.preview.setPlainText("stale text")
+    w._show_current_preview()
+    assert w.preview.toPlainText() == ""
+    assert "No document" in w.preview_state.text()
     w.close()
 
 
@@ -1473,13 +1807,14 @@ def test_successful_document_import_automatically_creates_version(
     w._project = Project(name="Case")
     create_project_workdir(w._project, tmp_path / "projects", "Case")
     w._files = [source]
-    w._extracted = {source: "John Doe."}
+    w._readings = {source: _as_reading(source, "John Doe.")}
     w._auto_version_pending = True
     fake = FakeAnonymizer()
 
     w._on_anonymized(fake, fake.generate_yaml(), {source: "#(P1V1)."})
+    _wait_workers(w, qapp)  # the version is written off the UI thread
 
-    version = w._project.workdir / "versions" / "v001"
+    version = w._project.workdir / "versions" / "output"
     assert (version / "output" / "a_pseudonymized.typ").exists()
     assert (version / "manifest.json").exists()
     assert w._auto_version_pending is False
@@ -1513,9 +1848,334 @@ def test_save_action_writes_outputs(qapp, tmp_path, monkeypatch):
     w.yaml_edit.setPlainText("PERSON: []")
     w._refresh_actions()
     w._on_save("multi")
+    _wait_workers(w, qapp)
 
-    version = out / "untitled-project" / "versions" / "v001"
+    version = out / "untitled-project" / "versions" / "output"
+    # Named after its folder, not the shared project.did-project.yaml filename.
+    assert w._project.name == "untitled-project"
     assert (version / "output" / "a_pseudonymized.typ").exists()
-    assert (version / "output" / "config.yaml").exists()
+    # entities.yaml is the version's single keys file.
+    assert not (version / "output" / "config.yaml").exists()
+    assert (version / "entities.yaml").exists()
     assert (version / "manifest.json").exists()
+    w.close()
+
+
+# ------------------------------------------- key explorer ↔ token consistency ---
+_DIVERGED = (
+    "PERSON:\n"
+    '  - id: "PERSON_1"\n    variants: ["Ann Lee"]\n'
+    '  - id: "PERSON_3"\n    variants: ["Bo Dahl", "B. Dahl"]\n'
+    "ORGANIZATION:\n"
+    '  - id: "ORGANIZATION_1"\n    variants: ["Acme"]\n'
+)
+
+
+def _place_cursor_on(w, token):
+    cursor = w.preview.textCursor()
+    cursor.setPosition(w.preview.toPlainText().index(token) + 2)
+    w.preview.setTextCursor(cursor)
+
+
+def _current_entity(w):
+    item = w.entity_table.item(w.entity_table.currentRow(), 2)
+    return (
+        item.data(ROLE_ENTITY_TYPE),
+        item.data(ROLE_TOKEN_INDEX),
+        item.data(ROLE_VARIANT),
+    )
+
+
+def test_preview_token_selects_the_identity_at_its_position(qapp):
+    w = _make_window(qapp)
+    w.yaml_edit.setPlainText(_DIVERGED)
+    w.preview.setPlainText("#(P1V1) met #(P2V1) at #(O1V1).")
+
+    # The # column shows the token key, not the (diverged) YAML id.
+    assert [w.entity_table.item(r, 1).text() for r in (0, 1)] == ["P1", "P2"]
+
+    _place_cursor_on(w, "#(P2V1)")
+    entity_type, number, _variant = _current_entity(w)
+    assert (entity_type, number) == ("PERSON", 2)
+    assert "Bo Dahl" in w.entity_details.toPlainText()
+    w.close()
+
+
+def test_variant_token_selects_the_variant_row(qapp):
+    w = _make_window(qapp)
+    w.yaml_edit.setPlainText(_DIVERGED)
+    w.preview.setPlainText("Later #(P2V2) wrote.")
+    _place_cursor_on(w, "#(P2V2)")
+    assert _current_entity(w) == ("PERSON", 2, "B. Dahl")
+    w.close()
+
+
+def test_token_reveals_a_row_hidden_by_the_filter(qapp):
+    w = _make_window(qapp)
+    w.yaml_edit.setPlainText(_DIVERGED)
+    w.entity_type_filter.setCurrentIndex(w.entity_type_filter.findData("PERSON"))
+    w.entity_search.setText("Ann")
+    w.preview.setPlainText("Signed #(O1V1).")
+    _place_cursor_on(w, "#(O1V1)")
+
+    assert w.entity_type_filter.currentData() == "ALL"
+    assert w.entity_search.text() == ""
+    assert _current_entity(w)[:2] == ("ORGANIZATION", 1)
+    assert not w.entity_table.isRowHidden(w.entity_table.currentRow())
+    w.close()
+
+
+def test_selection_survives_a_review_edit(qapp):
+    w = _make_window(qapp)
+    w.yaml_edit.setPlainText(_DIVERGED)
+    w.preview.setPlainText("#(O1V1)")
+    _place_cursor_on(w, "#(O1V1)")
+    w.yaml_edit.setPlainText(
+        _DIVERGED + '  - id: "ORGANIZATION_2"\n    variants: ["Zed"]\n'
+    )
+    assert _current_entity(w)[:2] == ("ORGANIZATION", 1)
+    w.close()
+
+
+def _saved_project_window(qapp, tmp_path, yaml_text=""):
+    from gdid.gui.window import MainWindow
+    from gdid.project import Project, create_project_workdir
+
+    project_file = create_project_workdir(
+        Project(name="Case", entity_config_yaml=yaml_text), tmp_path, "case"
+    )
+    w = MainWindow(
+        anonymizer_factory=FakeAnonymizer, settings=MemorySettings([project_file])
+    )
+    assert w._open_project_path(project_file)
+    return w, project_file.parent
+
+
+def test_yaml_edit_autosaves_draft_keys_without_dirtying(qapp, tmp_path):
+    from PySide6.QtTest import QTest
+
+    w, workdir = _saved_project_window(qapp, tmp_path)
+    keys = workdir / "draft" / "entities.yaml"
+    w.yaml_edit.setPlainText(_DIVERGED)
+    assert "saving…" in w.keys_bar.text
+    QTest.qWait(700)
+
+    assert keys.read_text(encoding="utf-8") == _DIVERGED
+    assert not w._dirty
+    assert "Keys: draft/entities.yaml" in w.keys_bar.text
+    assert "3 identities" in w.keys_bar.text
+    assert "saved ✓" in w.keys_bar.text
+    assert w.keys_bar.folder == workdir / "draft"
+
+    # Invalid YAML never replaces the last valid keys on disk.
+    w.yaml_edit.setPlainText("PERSON: [unclosed")
+    QTest.qWait(700)
+    assert keys.read_text(encoding="utf-8") == _DIVERGED
+    assert "invalid YAML" in w.keys_bar.text
+    w.close()
+
+
+def test_review_edits_save_immediately_to_draft_keys(qapp, tmp_path):
+    w, workdir = _saved_project_window(qapp, tmp_path, _DIVERGED)
+    w._add_entity_variant(0, "A. Lee")
+    saved = (workdir / "draft" / "entities.yaml").read_text(encoding="utf-8")
+    assert "A. Lee" in saved
+    assert "draft/entities.yaml" in w.status_label.text()
+    w.close()
+
+
+def _headless_export(monkeypatch):
+    """Stub the Typst export (FakeAnonymizer has no entities) and fail on dialogs."""
+    from gdid import pipeline
+
+    def fake_export(f, anonymizer, main_path, **kwargs):
+        main_path.write_text("tokens", encoding="utf-8")
+
+    def no_dialog(_parent, title, text, *args, **kwargs):
+        raise AssertionError(f"unexpected dialog: {title}: {text}")
+
+    monkeypatch.setattr(pipeline, "export_to_typst", fake_export)
+    monkeypatch.setattr("gdid.gui.window.QMessageBox.warning", no_dialog)
+
+
+def _run_to_idle(w, qapp):
+    from PySide6.QtTest import QTest
+
+    for _ in range(5):
+        _wait_workers(w, qapp)
+        QTest.qWait(50)
+
+
+def test_adding_a_document_merges_new_detections_into_the_review(
+    qapp, tmp_path, monkeypatch
+):
+    _headless_export(monkeypatch)
+    first = tmp_path / "first.md"
+    first.write_text("John Doe signed.", encoding="utf-8")
+    w, workdir = _saved_project_window(qapp, tmp_path)
+    w._add_paths([first])
+    _run_to_idle(w, qapp)
+    assert w._keys_origin == "fresh"
+
+    w._add_entity_variant(0, "J.D.")
+    w._apply_manual_entity_yaml(
+        pipeline.add_entity(w.yaml_edit.toPlainText(), "Jane Roe"), "Added."
+    )
+    second = tmp_path / "second.md"
+    second.write_text("Jane Roe and John Doe.", encoding="utf-8")
+    w._add_paths([second])
+    _run_to_idle(w, qapp)
+
+    people = pipeline.parse_yaml(w.yaml_edit.toPlainText())["PERSON"]
+    assert [p["variants"] for p in people] == [["John Doe", "J.D."], ["Jane Roe"]]
+    assert w._keys_origin == "merged"
+    assert "draft/entities.yaml" in w.keys_bar.text
+
+    import json
+
+    versions = sorted((workdir / "versions").iterdir())
+    manifest = json.loads((versions[-1] / "manifest.json").read_text())
+    keys = manifest["keys"]
+    assert keys["path"] == "entities.yaml"
+    assert keys["origin"] == "merged"
+    assert keys["identities"] == 2
+    from hashlib import sha256
+
+    assert (
+        keys["sha256"]
+        == sha256((versions[-1] / "entities.yaml").read_bytes()).hexdigest()
+    )
+    assert not list(versions[-1].rglob("config.yaml"))
+    w.close()
+
+
+def test_language_change_redetects_and_keeps_the_review(qapp, tmp_path, monkeypatch):
+    _headless_export(monkeypatch)
+    source = tmp_path / "a.md"
+    source.write_text("John Doe and Jane Roe.", encoding="utf-8")
+    w, workdir = _saved_project_window(qapp, tmp_path)
+    w._add_paths([source])
+    _run_to_idle(w, qapp)
+    w._apply_manual_entity_yaml(
+        pipeline.add_entity(w.yaml_edit.toPlainText(), "Jane Roe"), "Added."
+    )
+
+    target = "en" if w.lang_combo.currentData() != "en" else "da"
+    w.lang_combo.setCurrentIndex(w.lang_combo.findData(target))
+    _run_to_idle(w, qapp)
+
+    people = pipeline.parse_yaml(w.yaml_edit.toPlainText())["PERSON"]
+    assert ["Jane Roe"] in [p["variants"] for p in people]
+    assert w._project.language == target
+    # Same documents, but an explicit re-detection merges rather than reusing.
+    assert w._keys_origin == "merged"
+    assert w._current_file() in w._anonymized
+    w.close()
+
+
+def test_version_export_uses_a_yaml_edit_still_in_the_debounce(
+    qapp, tmp_path, monkeypatch
+):
+    from gdid import pipeline
+
+    exported = []
+
+    def fake_export(f, anonymizer, main_path, **kwargs):
+        exported.append(anonymizer._config)
+        main_path.write_text("tokens", encoding="utf-8")
+
+    monkeypatch.setattr(pipeline, "export_to_typst", fake_export)
+    source = tmp_path / "a.md"
+    source.write_text("John Doe.", encoding="utf-8")
+    w, workdir = _saved_project_window(qapp, tmp_path)
+    w._add_paths([source])
+    _run_to_idle(w, qapp)
+    exported.clear()
+
+    edited = 'PERSON:\n  - id: "PERSON_1"\n    variants: ["John Doe", "Doe"]\n'
+    w.yaml_edit.setPlainText(edited)
+    assert w._reapply_timer.isActive()
+    w._on_save("multi")
+    _wait_workers(w, qapp)
+
+    assert exported and exported[-1]["PERSON"][0]["variants"] == ["John Doe", "Doe"]
+    versions = sorted((workdir / "versions").iterdir())
+    assert (versions[-1] / "entities.yaml").read_text(encoding="utf-8") == edited
+    assert w._yaml_text == edited
+    w.close()
+
+
+def test_version_view_names_its_keys_file_and_resolves_tokens(qapp, tmp_path):
+    import json
+
+    w, workdir = _saved_project_window(qapp, tmp_path)
+    version = workdir / "versions" / "v001"
+    (version / "output").mkdir(parents=True)
+    (version / "output" / "a_pseudonymized.typ").write_text(
+        "#(P1V1) met #(P2V1).", encoding="utf-8"
+    )
+    (version / "entities.yaml").write_text(_DIVERGED, encoding="utf-8")
+    (version / "manifest.json").write_text(
+        json.dumps({"number": 1, "version_id": "v001"}), encoding="utf-8"
+    )
+    w._view_version(version)
+
+    assert "Keys: versions/v001/entities.yaml" in w.keys_bar.text
+    assert "read-only" in w.keys_bar.text
+    _place_cursor_on(w, "#(P2V1)")
+    assert _current_entity(w)[:2] == ("PERSON", 2)
+
+    w._return_to_draft()
+    assert "draft/entities.yaml" in w.keys_bar.text
+    w.close()
+
+
+def test_every_tree_node_can_open_its_folder(qapp, tmp_path, monkeypatch):
+    _headless_export(monkeypatch)
+    import json
+
+    from gdid.gui.project_tree import iter_tree_items
+    from gdid.project import save_not_names
+
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    source = source_dir / "a.md"
+    source.write_text("John Doe.", encoding="utf-8")
+    w, workdir = _saved_project_window(qapp, tmp_path)
+    w._add_paths([source])
+    _run_to_idle(w, qapp)
+    save_not_names(w._project, ["Nobody"])
+    w._on_meta(metadata={"description": "x"})
+    w._refresh_project_tree()
+    version = sorted((workdir / "versions").iterdir())[-1]
+    assert json.loads((version / "manifest.json").read_text())["number"] == 1
+
+    opened = []
+    monkeypatch.setattr(w, "_reveal_path", lambda path: opened.append(Path(path)))
+    expected = {
+        "project": workdir,
+        "meta": workdir,
+        "meta_entry": workdir,
+        "draft": workdir / "draft",
+        "draft_document": source_dir,
+        "draft_keys": workdir / "draft",
+        "excluded_group": workdir / "draft",
+        "excluded_detection": workdir / "draft",
+        "version": version,
+        "version_keys": version,
+        "version_document": version / "output",
+    }
+    seen = set()
+    for item in iter_tree_items(w.project_tree):
+        kind = item.data(0, ROLE_PROJECT_KIND)
+        if kind not in expected or kind in seen:
+            continue
+        seen.add(kind)
+        menu = w._project_tree_menu(item)
+        action = next(a for a in menu.actions() if a.text() == "Open in file manager")
+        assert action.isEnabled(), kind
+        opened.clear()
+        action.trigger()
+        assert opened == [expected[kind]], kind
+    assert seen == set(expected)
     w.close()

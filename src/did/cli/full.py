@@ -9,7 +9,7 @@ from treeparse import argument, command, option
 
 from ..core.anonymizer import Anonymizer
 from ..utils.console import console, print_counts
-from ..utils.file_utils import export_to_typst, extract_text
+from ..utils.file_utils import export_to_typst, read_document
 
 
 def full(file, output, language):
@@ -32,7 +32,11 @@ def full(file, output, language):
         console.print(Rule("full"))
         console.print("[bold]Step 1:[/bold] Extracting entities...")
         anonymizer = Anonymizer(language=language)
-        text = extract_text(input_path)
+        reading = read_document(input_path)
+        if not reading.readable:
+            console.print("[red]Error:[/red] No readable text in the document.")
+            sys.exit(1)
+        text = reading.text
         anonymizer.detect_entities([text])
 
         console.print("[bold]Detected entities:[/bold]")
@@ -49,7 +53,9 @@ def full(file, output, language):
         with open(config_file) as f:
             config_data = yaml_obj.load(f) or {}
         pseudo_anonymizer.load_replacements(config_data)
-        export_to_typst(input_path, pseudo_anonymizer, output_path)
+        export_to_typst(
+            input_path, pseudo_anonymizer, output_path, source_text=reading.text
+        )
 
         console.print("[bold]Replacement counts:[/bold]")
         print_counts(pseudo_anonymizer.counts, "replaced")
@@ -86,7 +92,7 @@ full_cmd = command(
             flags=["--language", "-l"],
             arg_type=str,
             default="en",
-            help="Language for entity detection (e.g., 'en', 'da')",
+            help="Language for entity detection (e.g., 'en', 'da', 'sv')",
             sort_key=1,
         ),
     ],

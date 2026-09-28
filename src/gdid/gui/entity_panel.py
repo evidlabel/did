@@ -23,12 +23,22 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from did.core import entity_types
+
 from .. import pipeline
 
 ROLE_ENTITY_ID = Qt.ItemDataRole.UserRole + 10
 ROLE_VARIANT = Qt.ItemDataRole.UserRole + 11
 ROLE_ENTITY_TYPE = Qt.ItemDataRole.UserRole + 12
 ROLE_VARIANTS = Qt.ItemDataRole.UserRole + 13
+# 1-based position of the identity within its type: the number its tokens carry.
+ROLE_TOKEN_INDEX = Qt.ItemDataRole.UserRole + 14
+# 1-based variant position on child rows: the V<n> of the token.
+ROLE_VARIANT_INDEX = Qt.ItemDataRole.UserRole + 15
+
+_TYPE_PREFIX = {
+    entity.config_key: entity.prefix for entity in entity_types.ENTITY_TYPES
+}
 
 # Types offered in the type filter / review combo (not document titles).
 REVIEW_ENTITY_TYPES = (
@@ -229,8 +239,44 @@ class EntityPanel(QWidget):
                 ),
             )
 
+    def _row_key(self, row):
+        item = self.table.item(row, 2) if row >= 0 else None
+        if item is None:
+            return None
+        return (
+            item.data(ROLE_ENTITY_TYPE),
+            item.data(ROLE_TOKEN_INDEX),
+            item.data(ROLE_VARIANT_INDEX),
+        )
+
+    def _find_row(self, entity_type, number, variant=None):
+        """Row for identity *number* of *entity_type*, or its *variant* child row."""
+        parent_row = None
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 2)
+            if (
+                item is None
+                or item.data(ROLE_ENTITY_TYPE) != entity_type
+                or item.data(ROLE_TOKEN_INDEX) != number
+            ):
+                continue
+            row_variant = item.data(ROLE_VARIANT_INDEX)
+            if row_variant is None:
+                parent_row = row
+                if variant is None:
+                    return row
+            elif row_variant == variant:
+                return row
+        return parent_row
+
     def refresh_from_yaml(self, text: str) -> bool:
-        """Populate the table from YAML config. Returns False on parse error."""
+        """Populate the table from YAML config. Returns False on parse error.
+
+        The selected identity and the scroll position survive the rebuild, so a
+        review edit does not throw the reviewer back to the top of the list.
+        """
+        previous = self._row_key(self.table.currentRow())
+        scroll = self.table.verticalScrollBar().value()
         self.table.setRowCount(0)
         self.details.clear()
         if not text.strip():
@@ -239,7 +285,7 @@ class EntityPanel(QWidget):
             )
             return True
         try:
-            data = pipeline.parse_yaml(text)
+            data = pipeline.read_keys(text)
         except ValueError as exc:
             self.validation_label.setText(str(exc))
             self.validation_label.setStyleSheet("color: #b3261e;")
@@ -248,17 +294,21 @@ class EntityPanel(QWidget):
         for entity_type, entities in data.items():
             if not isinstance(entities, list):
                 continue
+            position = 0
             for entity in entities:
                 if not isinstance(entity, dict):
                     continue
+                position += 1
                 row = self.table.rowCount()
                 self.table.insertRow(row)
                 variants = entity.get("variants", [])
                 entity_id = str(entity.get("id", ""))
                 type_item = QTableWidgetItem(str(entity_type))
-                compact_id = entity_id.removeprefix(f"{entity_type}_")
-                id_item = QTableWidgetItem(compact_id)
-                id_item.setToolTip(entity_id)
+                prefix = _TYPE_PREFIX.get(str(entity_type), "")
+                id_item = QTableWidgetItem(f"{prefix}{position}")
+                id_item.setToolTip(
+                    f"Token #({prefix}{position}V…) · YAML id {entity_id or '—'}"
+                )
                 variants = list(map(str, variants))
                 variants_item = QTableWidgetItem(", ".join(variants))
                 confidence = entity.get("confidence")
@@ -277,6 +327,7 @@ class EntityPanel(QWidget):
                     item.setData(ROLE_ENTITY_ID, entity_id)
                     item.setData(ROLE_ENTITY_TYPE, str(entity_type))
                     item.setData(ROLE_VARIANTS, variants)
+                    item.setData(ROLE_TOKEN_INDEX, position)
                 variants_item.setData(Qt.ItemDataRole.UserRole, variants)
                 variants_item.setToolTip("\n".join(variants))
                 self.table.setItem(row, 0, type_item)
@@ -284,11 +335,11 @@ class EntityPanel(QWidget):
                 self.table.setItem(row, 2, variants_item)
                 self.table.setItem(row, 3, confidence_item)
                 if entity_type == "PERSON" and len(variants) > 1:
-                    for variant in variants:
+                    for variant_index, variant in enumerate(variants, 1):
                         child_row = self.table.rowCount()
                         self.table.insertRow(child_row)
                         child_type = QTableWidgetItem("")
-                        child_id = QTableWidgetItem("↳")
+                        child_id = QTableWidgetItem(f"↳ V{variant_index}")
                         child_variant = QTableWidgetItem(variant)
                         child_confidence = QTableWidgetItem("")
                         for item in (
@@ -301,6 +352,8 @@ class EntityPanel(QWidget):
                             item.setData(ROLE_ENTITY_TYPE, str(entity_type))
                             item.setData(ROLE_VARIANT, variant)
                             item.setData(ROLE_VARIANTS, [variant])
+                            item.setData(ROLE_TOKEN_INDEX, position)
+                            item.setData(ROLE_VARIANT_INDEX, variant_index)
                         child_variant.setData(Qt.ItemDataRole.UserRole, [variant])
                         child_variant.setToolTip(variant)
                         self.table.setItem(child_row, 0, child_type)
@@ -311,27 +364,34 @@ class EntityPanel(QWidget):
         self.validation_label.setStyleSheet("")
         self.validation_label.setText(f"{count} identities · configuration valid")
         self.filter_entities(self.search.text())
-        if count:
+        restored = self._find_row(*previous) if previous else None
+        if restored is not None:
+            self.table.setCurrentCell(restored, 0)
+            self.table.verticalScrollBar().setValue(scroll)
+        elif count:
             self.table.setCurrentCell(0, 0)
         return True
 
-    def select_entity(self, entity_type: str, possible_ids: set[str]) -> bool:
-        """Select the first parent row matching type and any of *possible_ids*."""
-        for row in range(self.table.rowCount()):
-            item = self.table.item(row, 2)
-            type_item = self.table.item(row, 0)
-            if item is None or type_item is None or not type_item.text():
-                continue
-            if (
-                item.data(ROLE_ENTITY_TYPE) == entity_type
-                and item.data(ROLE_ENTITY_ID) in possible_ids
-            ):
-                self.table.clearSelection()
-                self.table.setCurrentCell(row, 2)
-                self.table.selectRow(row)
-                self.table.scrollToItem(item, QTableWidget.ScrollHint.PositionAtCenter)
-                return True
-        return False
+    def select_entity(self, entity_type: str, number: int, variant=None) -> bool:
+        """Select identity *number* of *entity_type* — the one a token names.
+
+        A ``V<n>`` token selects that variant's child row when the identity
+        lists its variants separately. A row hidden by the type filter or the
+        search is revealed first, so a clicked token always lands visibly.
+        """
+        row = self._find_row(entity_type, number, variant)
+        if row is None:
+            return False
+        if self.table.isRowHidden(row):
+            self.type_filter.setCurrentIndex(0)
+            self.search.clear()
+            self.filter_entities("")
+        item = self.table.item(row, 2)
+        self.table.clearSelection()
+        self.table.setCurrentCell(row, 2)
+        self.table.selectRow(row)
+        self.table.scrollToItem(item, QTableWidget.ScrollHint.PositionAtCenter)
+        return True
 
     def clear(self) -> None:
         self.table.setRowCount(0)
@@ -340,3 +400,45 @@ class EntityPanel(QWidget):
         self.validation_label.setText(
             "Entities appear here automatically after documents are added."
         )
+
+
+class KeysSourceBar(QWidget):
+    """One line naming the keys file behind what is shown, with a folder link."""
+
+    openFolderRequested = Signal(object)  # Path
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._folder = None
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 0, 4, 0)
+        self.label = QLabel()
+        self.label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.label.setWordWrap(True)
+        layout.addWidget(self.label, 1)
+        self.open_button = QPushButton("Open folder")
+        self.open_button.setFlat(True)
+        self.open_button.setToolTip("Show the keys file’s folder in the file manager.")
+        self.open_button.clicked.connect(
+            lambda: (
+                self._folder is not None and self.openFolderRequested.emit(self._folder)
+            )
+        )
+        layout.addWidget(self.open_button)
+        self.set_source("Keys: none yet — add documents to detect entities.")
+
+    @property
+    def text(self) -> str:
+        return self.label.text()
+
+    @property
+    def folder(self):
+        return self._folder
+
+    def set_source(self, text: str, *, tooltip: str = "", folder=None, warn=False):
+        self.label.setText(text)
+        self.label.setStyleSheet("color: #b3261e;" if warn else "")
+        self.setToolTip(tooltip)
+        self.label.setToolTip(tooltip)
+        self._folder = folder
+        self.open_button.setEnabled(folder is not None and folder.exists())

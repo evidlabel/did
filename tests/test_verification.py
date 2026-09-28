@@ -119,11 +119,11 @@ def test_hyphenated_compound_leak_is_caught():
     assert findings[0].entity_id == "PERSON_1"
 
 
-def test_case_variant_leak_survives_replacement_and_is_caught():
-    """An ALL-CAPS heading form is case-sensitively missed by the replacer."""
+def test_all_caps_form_is_replaced_and_verifies_clean():
+    """An ALL-CAPS heading form is replaced like the written form."""
     output = _replace("John Doe said. JOHN DOE signed it.")
-    assert "JOHN DOE" in output, "replacement was expected to leave this behind"
-    assert [f.text for f in find_surviving_variants(output, CONFIG)] == ["JOHN DOE"]
+    assert "JOHN" not in output and "DOE" not in output
+    assert find_surviving_variants(output, CONFIG) == []
 
 
 def test_hyphenated_linebreak_leak_survives_replacement_and_is_caught():
@@ -243,3 +243,28 @@ def test_verify_labels_documents_by_name(tmp_path):
 def test_verify_spans_multiple_documents():
     report = verify({"a": "John Doe.", "b": "Jane Roe."}, CONFIG)
     assert sorted(f.document for f in report.leaks) == ["a", "b"]
+
+
+def test_capitalization_forms_of_names_are_replaced():
+    config = {
+        "PERSON": [
+            {"id": "PERSON_1", "variants": ["John Doe", "Hans"]},
+        ],
+        "ORGANIZATION": [{"id": "ORGANIZATION_1", "variants": ["Acme Holding"]}],
+        "EMAIL_ADDRESS": [{"id": "EMAIL_ADDRESS_1", "variants": ["j.doe@acme.dk"]}],
+    }
+    output = _replace(
+        "JOHN DOE, John DOE and john doe. JOHN DOE'S car. "
+        "HANS signed; Hans too. ACME HOLDING wrote from J.DOE@ACME.DK.",
+        config,
+    )
+    for leaked in ("JOHN", "DOE", "john", "HANS", "Hans", "ACME", "J.DOE"):
+        assert leaked not in output, output
+    assert output.count("#(P1V1)") == 4
+
+
+def test_single_word_name_does_not_swallow_the_lowercase_word():
+    """'Hans' is a name; lowercase 'hans' is the Danish word 'his'."""
+    config = {"PERSON": [{"id": "PERSON_1", "variants": ["Hans"]}]}
+    output = _replace("Hans tog hans bil. HANS kom.", config)
+    assert output == "#(P1V1) tog hans bil. #(P1V1) kom."

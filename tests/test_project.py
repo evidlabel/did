@@ -53,6 +53,12 @@ def test_project_round_trip_uses_relative_paths(tmp_path):
     assert registry["sources"][0]["path"] == str(source)
 
 
+def test_pdf_export_mode_round_trips(tmp_path):
+    project = Project(name="Case", export_mode="pdf")
+    project_path = save_project(project, tmp_path / "case.did-project.yaml")
+    assert load_project(project_path).export_mode == "pdf"
+
+
 def test_external_source_remains_absolute(tmp_path):
     external = Path("/outside/case.md")
     project_path = save_project(
@@ -72,6 +78,12 @@ def test_invalid_schema_is_rejected(tmp_path):
     project_path.write_text("schema_version: 999\n", encoding="utf-8")
     with pytest.raises(ProjectError, match="schema version"):
         load_project(project_path)
+
+
+def test_swedish_project_language_round_trips(tmp_path):
+    project = Project(name="Ärende", language="sv")
+    loaded = load_project(save_project(project, tmp_path / "case.did-project.yaml"))
+    assert loaded.language == "sv"
 
 
 def test_invalid_language_is_rejected(tmp_path):
@@ -101,7 +113,7 @@ def test_not_names_require_saved_project():
         save_not_names(Project(), ["Kilder"])
 
 
-def test_canonical_workdir_and_immutable_version(tmp_path):
+def test_canonical_workdir_and_single_output(tmp_path):
     source = tmp_path / "source.md"
     source.write_text("John Doe", encoding="utf-8")
     project = Project(
@@ -125,12 +137,41 @@ def test_canonical_workdir_and_immutable_version(tmp_path):
         app_version="test",
     )
 
-    assert version.version_id == "v001-strict-review"
+    assert version.version_id == "output"
     assert version.path.exists()
     assert not stage.path.exists()
     assert list_versions(project) == [version]
     assert version.manifest["sources"][0]["sha256"]
     assert version.manifest["files"]
+
+
+def test_a_second_export_replaces_the_single_output(tmp_path):
+    project = Project(name="Case", entity_config_yaml="PERSON: []\n")
+    create_project_workdir(project, tmp_path, "Case")
+
+    first = begin_version(project)
+    (first.path / "output" / "old.typ").write_text("#(P1V1)", encoding="utf-8")
+    finalize_version(
+        project,
+        first,
+        processing={"language": "en", "detection_profile": "thorough"},
+        export={"format": "typst", "mode": "multi"},
+        app_version="test",
+    )
+
+    second = begin_version(project)
+    (second.path / "output" / "new.typ").write_text("#(P1V1)", encoding="utf-8")
+    version = finalize_version(
+        project,
+        second,
+        processing={"language": "en", "detection_profile": "thorough"},
+        export={"format": "typst", "mode": "multi"},
+        app_version="test",
+    )
+
+    assert list_versions(project) == [version]
+    assert (version.path / "output" / "new.typ").exists()
+    assert not (version.path / "output" / "old.typ").exists()
 
 
 def test_aborted_version_does_not_consume_number(tmp_path):
@@ -183,3 +224,33 @@ def test_legacy_conversion_is_non_destructive(tmp_path):
     assert legacy_path.exists()
     assert converted.name == "project.did-project.yaml"
     assert load_project(converted).legacy is False
+
+
+def test_save_draft_entities_writes_only_the_keys_file(tmp_path):
+    from gdid.project import (
+        Project,
+        ProjectError,
+        create_project_workdir,
+        draft_entities_path,
+        save_draft_entities,
+    )
+
+    project = Project(name="Case")
+    with pytest.raises(ProjectError):
+        save_draft_entities(project, "PERSON: []\n")
+
+    project_file = create_project_workdir(project, tmp_path, "case")
+    before = project_file.read_text(encoding="utf-8")
+    project.name = "Renamed but not saved"
+
+    path = save_draft_entities(project, 'PERSON:\n  - id: "PERSON_1"\n')
+
+    assert (
+        path
+        == draft_entities_path(project)
+        == project.workdir / "draft" / "entities.yaml"
+    )
+    assert path.read_text(encoding="utf-8") == 'PERSON:\n  - id: "PERSON_1"\n'
+    assert project.entity_config_yaml == 'PERSON:\n  - id: "PERSON_1"\n'
+    assert project_file.read_text(encoding="utf-8") == before
+    assert not list(path.parent.glob(".*.tmp"))

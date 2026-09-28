@@ -12,30 +12,22 @@ description: >
 
 # did
 
-Aimed at **local** models. PII removal: local agent holds the source; remote AI gets only the stripped handoff.
+Strip is this CLI (spaCy/Presidio), not the chat model. The local process holds the source. A remote session gets only the token handoff.
 
-If this session is not local (inference, tools, logs, or storage leave the device): **track back**. A local model runs DID and delivers the pseudonymized / token-only set. Resume on that artifact only.
+If this session is not local (inference, tools, logs, or storage leave the device): do not read the source. A local `did` run delivers `anon/`. Resume on that artifact only.
 
-`#(P1V1)` / `#(P1V2)` = same person, two forms. `#(E1V1)` email · `#(A1V1)` address · `#(DOC1V1)` title. Reason from tokens.
+`#(P1V1)` / `#(P1V2)` = same person, two forms. `#(E1V1)` email · `#(A1V1)` address · `#(O1V1)` org · `#(DOC1V1)` title. Reason from tokens.
 
-Discover flags from the installed CLI: `did -h`, `did <path> -h`, `did -j`. After install or upgrade, rediscover — invoke from that output.
-
-## Route
-
-1. **Local** — full docs. Run DID. Review entities. Over-removal wins.
-2. **Handoff** — token-only artifact (`anon/` or GUI Markdown/JSON/ZIP). Leftover names, re-identifying context.
-3. **Remote** — if needed, that artifact only.
-
-Done when that artifact is inspected and any remote recipient has only it.
+Discover flags from the installed CLI: `did -h`, `did <path> -h`, `did -j`. After install or upgrade, rediscover. Danish text needs `-l da`. Swedish text needs `-l sv`.
 
 ## Run
 
 ```bash
 uv tool install 'did[models] @ git+https://github.com/evidlabel/did.git'
-did batch ./case_files -o ./work
+did batch ./case_files -o ./work -l da
 ```
 
-https://github.com/evidlabel/did · `did gui` for human review (extra `did[gui]`, or `did[all]`).
+https://github.com/evidlabel/did · `did gui` for a human pass (extra `did[gui]`, or `did[all]`).
 
 ```
 <out>/
@@ -43,11 +35,9 @@ https://github.com/evidlabel/did · `did gui` for human review (extra `did[gui]`
   keys/   SECRET — maps, vars, verification.json
 ```
 
-Handoff is `anon/` (or the GUI export). `keys/` and the GUI workdir stay on-device.
-
-Keep tokens verbatim. Real-source wording → citing skill for that type.
+Handoff is `anon/` (or the GUI export). `keys/` and the GUI workdir stay on-device. Over-removal wins.
 
 ## Limits
 
-- org names stay
-- tokens in BibTeX/Hayagriva do not substitute on compile — stay in `anon/`
+- Organizations are detected (`#(O1V1)`). Do not assume org names stay.
+- Tokens in BibTeX/Hayagriva do not substitute on compile. Keep them in `anon/`. They are not human-readable headings.

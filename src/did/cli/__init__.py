@@ -6,6 +6,7 @@ from .batch import batch_cmd
 from .extract import extract_cmd
 from .full import full_cmd
 from .gui import gui_cmd
+from .models import models_cmd
 from .pseudo import pseudo_group
 from .verify import verify_cmd
 
@@ -23,6 +24,7 @@ app.commands.append(full_cmd)
 app.commands.append(batch_cmd)
 app.commands.append(verify_cmd)
 app.commands.append(gui_cmd)
+app.commands.append(models_cmd)
 app.subgroups.append(pseudo_group)
 
 

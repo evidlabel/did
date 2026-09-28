@@ -42,12 +42,16 @@ models = [
     "en-core-web-md",
     "da-core-news-sm",
     "da-core-news-lg",
+    "sv-core-news-sm",
+    "sv-core-news-lg",
 ]
 all = [
     "PySide6",
     "en-core-web-md",
     "da-core-news-sm",
     "da-core-news-lg",
+    "sv-core-news-sm",
+    "sv-core-news-lg",
 ]
 
 [project.urls]
@@ -76,6 +80,8 @@ default-groups = ["dev"]
 en-core-web-md = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0/en_core_web_md-3.8.0-py3-none-any.whl" }
 da_core_news_sm = { url = "https://github.com/explosion/spacy-models/releases/download/da_core_news_sm-3.8.0/da_core_news_sm-3.8.0-py3-none-any.whl" }  # Added for Danish support
 da_core_news_lg = { url = "https://github.com/explosion/spacy-models/releases/download/da_core_news_lg-3.8.0/da_core_news_lg-3.8.0-py3-none-any.whl" }  # Added for Danish support
+sv_core_news_sm = { url = "https://github.com/explosion/spacy-models/releases/download/sv_core_news_sm-3.8.0/sv_core_news_sm-3.8.0-py3-none-any.whl" }
+sv_core_news_lg = { url = "https://github.com/explosion/spacy-models/releases/download/sv_core_news_lg-3.8.0/sv_core_news_lg-3.8.0-py3-none-any.whl" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/did", "src/gdid"]

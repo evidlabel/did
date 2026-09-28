@@ -46,6 +46,24 @@ NUMBER_CATEGORIES = [
 ]
 
 
+def keep_named_entity(category: str, text: str) -> bool:
+    """Drop NER fragments that are not names.
+
+    A single letter, ``Cc``, or the Swedish article ``Ett`` is not an
+    organization. A three-letter all-caps token such as ``SVT`` still is.
+    """
+    letters = [character for character in text if character.isalpha()]
+    if category == "location":
+        return len(letters) >= 3
+    if category != "organization":
+        return True
+    if len(letters) < 3:
+        return False
+    if len(letters) == 3 and not "".join(letters).isupper():
+        return False
+    return True
+
+
 def detect_entities(anonymizer, texts: list):
     """Detect entities in multiple texts using Presidio."""
     model_used = anonymizer.model_map.get(anonymizer.language, "unknown")
@@ -85,6 +103,8 @@ def detect_entities(anonymizer, texts: list):
             ent_type = result.entity_type
             if ent_type in TYPE_MAPPING and entity_text:
                 mapped = TYPE_MAPPING[ent_type]
+                if not keep_named_entity(mapped, entity_text):
+                    continue
                 if entity_text not in all_entities[mapped]:
                     all_entities[mapped].append(entity_text)
                     anonymizer.counts[f"{mapped}_found"] += 1
