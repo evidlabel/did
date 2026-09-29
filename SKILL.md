@@ -26,7 +26,7 @@ Discover flags from the installed CLI: `did -h`, `did <path> -h`, `did -j`. Afte
 2. **Review `<out>/anon/`** for leftover names and re-identifying context. Over-removal wins.
    - Local model available → it reviews, and gates what goes on to ingestion.
    - No model → a human reviews in `did gui` (extra `did[gui]`).
-   - Neither → still continue, but record the output as **unreviewed** (for example, an `UNREVIEWED` note in `<out>/anon/`, and say so in the report).
+   - Neither → still continue, but record the output as **unreviewed**: run `evid --db evid tag assign <uuid> unreviewed` for each source document already in the case set, and say so in the report. evid stores that tag as `<slug>.unreviewed`. `<out>/anon/` is Typst, not an evid document, so the handoff itself has no uuid to tag.
 3. **Hand off only `<out>/anon/`.** It is token-only Typst (`D1.typ`, or `combined.typ` when documents are combined) plus `manifest.json`. The tokens are raw `#(P1V1)` markup, and the directory is not PDFs. `evid --db evid doc add` accepts PDFs, a directory of PDFs, or a URL, so it does not ingest `anon/`. A remote model gets `<out>/anon/` and nothing else. Nothing in did or evid turns that Typst into a case PDF. Name that gap and stop rather than passing `anon/` to `doc add`.
 4. **Keep `<out>/keys/` out of Git.** Add it to `.gitignore` before the first commit.
 
