@@ -13,6 +13,8 @@
 - PDF / DOCX / Markdown / plain-text and other text formats extraction
 - Advisory sweep that re-scans for identifiers that survived replacement (an aid to review, not a verdict)
 - Placeholder-PDF handoff (`did anon --pdf`): PDFs only, no key set, ready for `evid doc add`
+- **Hand off to evid** (GUI): the reviewed documents go into the case's evid set of type `anon` as placeholder PDFs (title `[DOCUMENT n]`). A later handoff replaces them in place, and evid's labels follow identities that were renumbered. The map of sources to evid documents stays in the project's `draft/handoff.json`.
+- Workbench embedding: `did gui` opened with `?embed=1&project=<folder>&set=<evid set>` shows that one project, created when the folder is empty. It follows the workbench's light or dark theme and reports how many documents wait for a handoff.
 - Faker identities, or irreversible `[REDACTED]`
 
 ## GUI
