@@ -4,14 +4,15 @@
 
 **Aim.** Local-first review and pseudonymization of identity-bearing documents so a human can correct detection, and a remote model never sees the source.
 
-**Use.** Detect entities (Presidio + spaCy, English, Danish, and Swedish). Review in the desktop app. Emit pseudonymized documents into one output folder, or a token-only Markdown/JSON/ZIP handoff. Placeholders like `#(P1V1)` / `#(P1V2)` are the same person, two written forms.
+**Use.** `did extract` finds entities into a YAML map; you review and fix that map; `did anon` applies it and emits pseudonymized documents into one output folder, or a token-only Markdown/JSON/ZIP handoff. `did anon --pdf` compiles a placeholder PDF per document (labels such as `[PERSON 1]`, never the real values) for an ordinary `evid doc add`. Placeholders like `#(P1V1)` / `#(P1V2)` are the same person, two written forms.
 
 **Features.**
 - CLI + GUI over one on-disk case workdir (mutable draft, one rewritten output)
 - Entity review: type correction, aliases, identity merge, persistent exclusions
 - Searchable preview, clickable keys, manual labelling
 - PDF / DOCX / Markdown / plain-text and other text formats extraction
-- Output verification that re-scans for identifiers that survived replacement
+- Advisory sweep that re-scans for identifiers that survived replacement (an aid to review, not a verdict)
+- Placeholder-PDF handoff (`did anon --pdf`): PDFs only, no key set, ready for `evid doc add`
 - Faker identities, or irreversible `[REDACTED]`
 
 ## GUI

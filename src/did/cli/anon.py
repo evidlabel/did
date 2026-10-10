@@ -1,8 +1,11 @@
-"""Batch command for CLI: multi-document anonymization to Typst with one shared config.
+"""Anon command: pseudonymize documents with one shared config.
 
 Produces an *agent-safe* token-only view (``anon/``) and a *secret* key set
 (``keys/``) that maps tokens back to real or fake PII. The agent is meant to read
 only ``anon/``; everything that can reveal PII lives in ``keys/``.
+
+With ``--config`` the reviewed map from ``did extract`` is applied directly and
+detection is skipped, so the extract → review → anon loop threads one file.
 
 Output layout::
 
@@ -11,13 +14,16 @@ Output layout::
         D1.typ, D2.typ, …    #   body uses #(P1V1) tokens, no #import header;
                              #   named by position because a source filename is
                              #   itself identifying
-        manifest.json        #   doc list + token IDs only (no values)
+        manifest.json        #   doc list + token IDs + sweep counts only (no values)
       keys/                  # SECRET — never expose to an agent
         config.yaml          #   token -> real PII (the sensitive map)
         shared_vars.typ      #   #let P1V1 = "<real>"
         shared_fakevars.typ  #   #let P1V1 = "<fake>"
         render_real.typ      #   self-contained: imports shared_vars + all bodies
         render_fake.typ      #   self-contained: imports shared_fakevars + all bodies
+        sweep.json           #   full sweep report (quotes PII)
+      pdf/                   # HANDOFF (with --pdf) — placeholder PDFs only, no keys
+        D1.pdf, D2.pdf, …    #   tokens rewritten to [PERSON 1]-style labels
 """
 
 import json
@@ -31,8 +37,9 @@ from treeparse import argument, command, option
 from ..core.anonymizer import Anonymizer
 from ..core.entity_types import DOCUMENT_TITLE
 from ..core.verification import TOKEN_RE, verify
-from ..utils.console import console, print_counts, print_verification
+from ..utils.console import console, print_counts, print_sweep
 from ..utils.file_utils import SUPPORTED_SUFFIXES, export_to_typst, read_document
+from ..utils.pdf_render import RENDER_MODES, render_pdfs
 
 TYPST_INPUT_SUFFIXES = SUPPORTED_SUFFIXES
 
@@ -76,8 +83,8 @@ def _write_render_file(path, import_name, bodies):
             f.write(f"= {name}\n\n{body}\n\n")
 
 
-def batch(files, output, language, combine):
-    """Anonymize multiple documents with one shared config into token-only Typst."""
+def anon(files, output, language, config, combine, pdf, render):
+    """Pseudonymize documents into token-only Typst with one shared config."""
     inputs = _collect_inputs(files)
     if not inputs:
         console.print(
@@ -100,11 +107,7 @@ def batch(files, output, language, combine):
     config_file = keys_dir / "config.yaml"
 
     try:
-        console.print(Rule("batch"))
-        console.print(
-            f"[bold]Step 1:[/bold] Detecting entities across {len(inputs)} document(s)..."
-        )
-        anonymizer = Anonymizer(language=language)
+        console.print(Rule("anon"))
         readings = [read_document(p) for p in inputs]
         unreadable = [reading.path.name for reading in readings if not reading.readable]
         if unreadable:
@@ -112,28 +115,37 @@ def batch(files, output, language, combine):
                 "[red]Error:[/red] No readable text in " + ", ".join(unreadable)
             )
             sys.exit(1)
-        texts = [reading.text for reading in readings]
-        anonymizer.detect_entities(texts)
 
-        console.print("[bold]Detected entities:[/bold]")
-        print_counts(anonymizer.counts, "found")
-
-        yaml_str = anonymizer.generate_yaml()
-        with open(config_file, "w", encoding="utf-8") as f:
-            f.write(yaml_str)
-        console.print(f"Shared config written to [cyan]{config_file}[/cyan]")
-
-        # Re-load the shared config so every doc pseudonymizes against the same map.
-        console.print("[bold]Step 2:[/bold] Pseudonymizing to token-only Typst...")
-        pseudo = Anonymizer(language=language)
         yaml_obj = yaml.YAML()
-        with open(config_file, encoding="utf-8") as f:
-            config_data = yaml_obj.load(f) or {}
+        if config:
+            # The reviewed map from `did extract` wins; re-detecting here would
+            # silently discard every correction the reviewer made.
+            config_path = Path(config)
+            if not config_path.exists():
+                console.print(f"[red]Error:[/red] Config {config} not found.")
+                sys.exit(1)
+            console.print(
+                f"[bold]Step 1:[/bold] Using reviewed config "
+                f"[cyan]{config_path}[/cyan] (detection skipped)..."
+            )
+            config_data = yaml_obj.load(config_path.read_text(encoding="utf-8")) or {}
+        else:
+            console.print(
+                f"[bold]Step 1:[/bold] Detecting entities across "
+                f"{len(inputs)} document(s)..."
+            )
+            anonymizer = Anonymizer(language=language)
+            anonymizer.detect_entities([reading.text for reading in readings])
+
+            console.print("[bold]Detected entities:[/bold]")
+            print_counts(anonymizer.counts, "found")
+
+            config_data = yaml_obj.load(anonymizer.generate_yaml()) or {}
 
         # A filename identifies the case as surely as the body does. Titles join
         # the config as ordinary entities rather than getting a bespoke code
-        # path, so replacement, the vars/fakevars files and verification all
-        # handle them exactly as they handle a person or an address — including
+        # path, so replacement, the vars/fakevars files and the sweep all handle
+        # them exactly as they handle a person or an address — including
         # tokenizing a document that names itself in its own body.
         config_data[DOCUMENT_TITLE.config_key] = [
             {"id": f"{DOCUMENT_TITLE.config_key}_{index}", "variants": [src.name]}
@@ -142,11 +154,14 @@ def batch(files, output, language, combine):
         with open(config_file, "w", encoding="utf-8") as f:
             yaml_obj.dump(config_data, f)
 
+        console.print(f"Shared config written to [cyan]{config_file}[/cyan]")
+        console.print("[bold]Step 2:[/bold] Pseudonymizing to token-only Typst...")
+        pseudo = Anonymizer(language=language)
         pseudo.load_replacements(config_data)
 
-        # (title token, token-only body) for render files / combine. The heading
-        # is a token so render_real.typ still compiles to the real filename for a
-        # human, while anon/ never spells it out.
+        # (title token, token-only body) for render files / combine / PDF. The
+        # heading is a token so render_real.typ still compiles to the real
+        # filename for a human, while anon/ never spells it out.
         bodies = []
         tokens = set()
         doc_names = [f"D{index}.typ" for index in range(1, len(inputs) + 1)]
@@ -182,20 +197,20 @@ def batch(files, output, language, combine):
         _write_render_file(keys_dir / "render_real.typ", shared_vars.name, bodies)
         _write_render_file(keys_dir / "render_fake.typ", shared_fakevars.name, bodies)
 
-        # Step 3 re-reads what was actually written, not what we think we wrote,
-        # so a bug anywhere upstream still shows up here.
-        console.print("[bold]Step 3:[/bold] Verifying output...")
+        # The sweep re-reads what was actually written, not what we think we
+        # wrote. It is an advisory aid to review, never a verdict on anonymity.
+        console.print("[bold]Step 3:[/bold] Running the automated sweep...")
         outputs = {
             path.name: path.read_text(encoding="utf-8")
             for path in sorted(anon_dir.glob("*.typ"))
         }
         report = verify(outputs, config_data, anonymizer=pseudo)
-        print_verification(report)
+        print_sweep(report)
 
         # Findings quote the PII they report, so the full report belongs with the
         # keys. anon/ gets counts and locations only, or the report would itself
         # be the leak it is warning about.
-        with open(keys_dir / "verification.json", "w", encoding="utf-8") as f:
+        with open(keys_dir / "sweep.json", "w", encoding="utf-8") as f:
             json.dump(report.to_dict(), f, ensure_ascii=False, indent=2)
 
         # Title tokens belong to the set's vocabulary even when no body happens
@@ -204,15 +219,34 @@ def batch(files, output, language, combine):
             f"{DOCUMENT_TITLE.prefix}{index}V1" for index in range(1, len(inputs) + 1)
         )
 
-        # Agent-safe manifest: structure + token IDs only, never values.
+        # Agent-safe manifest: structure + token IDs + counts only, never values
+        # and never a "clean"/"verified" verdict to lean on.
         manifest = {
             "documents": anon_docs,
             "tokens": sorted(tokens),
             "token_count": len(tokens),
-            "verification": report.to_safe_dict(),
+            "sweep": report.to_safe_dict(),
         }
         with open(anon_dir / "manifest.json", "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2)
+
+        if pdf:
+            # Importable handoff: placeholder PDFs, ordinary documents to evid.
+            # The labelled Typst sources stay in a temp dir, so pdf/ holds PDFs
+            # only — never the key set that would undo the pseudonymization.
+            console.print(
+                f"[bold]Step 4:[/bold] Compiling {render} PDFs for handoff..."
+            )
+            pdf_dir = out_dir / "pdf"
+            written = render_pdfs(
+                bodies,
+                tokens,
+                pdf_dir,
+                combine=combine,
+                mode=render,
+                language=language,
+            )
+            console.print(f"Importable PDFs ({len(written)}) in [cyan]{pdf_dir}[/cyan]")
 
         console.print("[bold]Replacement counts:[/bold]")
         print_counts(pseudo.counts, "replaced")
@@ -231,13 +265,14 @@ def batch(files, output, language, combine):
         sys.exit(1)
 
 
-batch_cmd = command(
-    name="batch",
+anon_cmd = command(
+    name="anon",
     help=(
-        "Anonymize multiple documents with one shared config into token-only Typst "
-        "(agent-safe anon/ + secret keys/)."
+        "Pseudonymize documents with one shared config into token-only Typst "
+        "(agent-safe anon/ + secret keys/) and, with --pdf, an importable "
+        "placeholder-PDF handoff."
     ),
-    callback=batch,
+    callback=anon,
     arguments=[
         argument(
             name="files",
@@ -266,10 +301,37 @@ batch_cmd = command(
             sort_key=1,
         ),
         option(
+            flags=["--config", "-c"],
+            arg_type=str,
+            default=None,
+            help=(
+                "Reviewed YAML map from `did extract`. Supplying it skips "
+                "detection and applies the map as-is."
+            ),
+            sort_key=2,
+        ),
+        option(
             flags=["--combine"],
             flag=True,
             help="Emit a single chapterized combined.typ instead of per-document files.",
-            sort_key=2,
+            sort_key=3,
+        ),
+        option(
+            flags=["--pdf"],
+            flag=True,
+            help=(
+                "Also compile an importable placeholder PDF per document into "
+                "<out>/pdf/ (PDFs only — no keys, no config)."
+            ),
+            sort_key=4,
+        ),
+        option(
+            flags=["--render"],
+            arg_type=str,
+            default="placeholder",
+            choices=list(RENDER_MODES),
+            help="Label form for --pdf: placeholder, redacted, or synthetic.",
+            sort_key=5,
         ),
     ],
 )

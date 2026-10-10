@@ -91,7 +91,12 @@ class Finding:
 
 @dataclass
 class VerificationReport:
-    """Findings from one verification pass over a document set."""
+    """Findings from one automated sweep over a document set.
+
+    A report is an aid to review, never a verdict: it can say which configured
+    variants survived and which spans look like entities, but it cannot judge
+    re-identifying context. Callers must not present it as "checked" or "clean".
+    """
 
     leaks: list[Finding] = field(default_factory=list)
     suspected: list[Finding] = field(default_factory=list)
@@ -102,32 +107,34 @@ class VerificationReport:
 
     @property
     def is_clean(self) -> bool:
-        """True when nothing needs the reviewer's attention.
+        """True when the sweep surfaced nothing.
 
         Retained exclusions are the reviewer's own recorded decision, so they do
-        not make a report unclean.
+        not count against it. This is not a statement that the output is
+        anonymous — only that the automated tiers found nothing.
         """
         return not self.leaks and not self.suspected
 
     def summary(self) -> str:
-        """One-line human summary."""
-        if self.is_clean:
-            return "Output verification: clean."
-        parts = []
-        if self.leaks:
-            parts.append(f"{len(self.leaks)} surviving identifier(s)")
-        if self.suspected:
-            parts.append(f"{len(self.suspected)} suspected identifier(s)")
-        return "Output verification: " + ", ".join(parts) + "."
+        """One-line description of what the automated sweep found."""
+        survivors = len(self.leaks)
+        suspects = len(self.suspected)
+        return (
+            f"Automated sweep: {survivors} known survivor(s), {suspects} "
+            "suspect(s); context not checked."
+        )
 
     def counts(self) -> dict:
-        """Finding counts only — safe to place beside token-only output."""
+        """Finding counts only — safe to place beside token-only output.
+
+        Deliberately has no ``clean``/``verified`` boolean: a count is data, a
+        verdict invites a reader to skip their own review.
+        """
         counts = {
             "leaks": len(self.leaks),
             "suspected": len(self.suspected),
             "retained": len(self.retained),
             "deep": self.deep,
-            "clean": self.is_clean,
         }
         if self.deep_error:
             counts["deep_error"] = self.deep_error

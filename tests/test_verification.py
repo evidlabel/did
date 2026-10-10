@@ -198,19 +198,25 @@ def test_find_retained_exclusions_directly():
 
 
 # ---------------------------------------------------------------- report ---
-def test_report_counts_and_cleanliness():
+def test_report_counts_are_data_not_a_verdict():
     report = verify({"d.typ": "John Doe was here."}, CONFIG)
     assert not report.is_clean
     counts = report.counts()
     assert counts["leaks"] == 1
-    assert counts["clean"] is False
     assert counts["deep"] is False
-    assert "1 surviving identifier" in report.summary()
+    # No "clean"/"verified" boolean to tick off instead of reviewing.
+    assert "clean" not in counts
+    assert "1 known survivor" in report.summary()
+    assert "context not checked" in report.summary()
 
 
-def test_clean_report_summary():
+def test_clean_report_summary_stays_advisory():
     report = verify({"d": "#(P1V1) only."}, CONFIG)
-    assert report.summary() == "Output verification: clean."
+    summary = report.summary()
+    assert "0 known survivor" in summary
+    assert "context not checked" in summary
+    assert "clean" not in summary.lower()
+    assert "verif" not in summary.lower()
 
 
 def test_retained_alone_does_not_make_a_report_unclean():

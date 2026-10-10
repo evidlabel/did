@@ -1,10 +1,13 @@
-"""Tests for the `did batch` multi-document command."""
+"""Tests for the `did anon` command."""
 
 import io
 import json
 import re
 import sys
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+
+import pytest
 
 PERSON_TOKEN_RE = re.compile(r"#\((P\d+V\d+)\)")
 
@@ -35,10 +38,10 @@ def _make_docs(tmp_path):
     return doc1, doc2
 
 
-def test_batch_shared_tokens_and_no_pii_leak(tmp_path):
+def test_anon_shared_tokens_and_no_pii_leak(tmp_path):
     doc1, doc2 = _make_docs(tmp_path)
     out_dir = tmp_path / "out"
-    _run(["did", "batch", str(doc1), str(doc2), "-o", str(out_dir)])
+    _run(["did", "anon", str(doc1), str(doc2), "-o", str(out_dir)])
 
     anon = out_dir / "anon"
     keys = out_dir / "keys"
@@ -73,10 +76,10 @@ def test_batch_shared_tokens_and_no_pii_leak(tmp_path):
     assert manifest["tokens"]
 
 
-def test_batch_render_files_are_self_contained(tmp_path):
+def test_anon_render_files_are_self_contained(tmp_path):
     doc1, doc2 = _make_docs(tmp_path)
     out_dir = tmp_path / "out"
-    _run(["did", "batch", str(doc1), str(doc2), "-o", str(out_dir)])
+    _run(["did", "anon", str(doc1), str(doc2), "-o", str(out_dir)])
 
     keys = out_dir / "keys"
     real = (keys / "render_real.typ").read_text()
@@ -89,10 +92,10 @@ def test_batch_render_files_are_self_contained(tmp_path):
     assert PERSON_TOKEN_RE.search(real)
 
 
-def test_batch_combine_single_doc(tmp_path):
+def test_anon_combine_single_doc(tmp_path):
     doc1, doc2 = _make_docs(tmp_path)
     out_dir = tmp_path / "out"
-    _run(["did", "batch", str(doc1), str(doc2), "-o", str(out_dir), "--combine"])
+    _run(["did", "anon", str(doc1), str(doc2), "-o", str(out_dir), "--combine"])
 
     anon = out_dir / "anon"
     assert (anon / "combined.typ").exists()
@@ -107,24 +110,132 @@ def test_batch_combine_single_doc(tmp_path):
     assert manifest["documents"] == ["combined.typ"]
 
 
-def test_batch_accepts_directory(tmp_path):
+def test_anon_accepts_directory(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
     (src / "a.md").write_text("Report by John Doe.")
     (src / "b.txt").write_text("Reviewed by John Doe.")
     out_dir = tmp_path / "out"
-    _run(["did", "batch", str(src), "-o", str(out_dir)])
+    _run(["did", "anon", str(src), "-o", str(out_dir)])
 
     anon = out_dir / "anon"
     assert (anon / "D1.typ").exists()
     assert (anon / "D2.typ").exists()
 
 
-def test_batch_no_inputs_exits_nonzero(tmp_path):
+def test_anon_uses_a_supplied_config_without_detecting(tmp_path):
+    """-c applies the reviewed map as-is, so step 2 edits are not re-detected."""
+    doc = tmp_path / "case.md"
+    doc.write_text("Meeting: John Doe met Jane Roe.")
+    config = tmp_path / "case.yaml"
+    config.write_text("PERSON:\n  - id: PERSON_1\n    variants:\n      - John Doe\n")
+    out_dir = tmp_path / "out"
+    _run(["did", "anon", str(doc), "-o", str(out_dir), "-c", str(config)])
+
+    body = (out_dir / "anon" / "D1.typ").read_text()
+    assert "#(P1V1)" in body
+    assert "John Doe" not in body
+    # Detection was skipped: the map did not know Jane Roe, so she survives.
+    assert "Jane Roe" in body
+
+
+def test_anon_missing_config_exits_nonzero(tmp_path):
+    doc = tmp_path / "case.md"
+    doc.write_text("Report by John Doe.")
+    with pytest.raises(SystemExit):
+        _run(
+            [
+                "did",
+                "anon",
+                str(doc),
+                "-o",
+                str(tmp_path / "out"),
+                "-c",
+                str(tmp_path / "nope.yaml"),
+            ]
+        )
+
+
+def _record_pdf_render(monkeypatch):
+    """Replace the PDF renderer with a recorder that writes fake PDFs."""
+    import did.cli.anon as batch_mod
+
+    recorded = {}
+
+    def fake_render(bodies, tokens, out_dir, *, combine, mode, language, seed="did"):
+        recorded.update(
+            bodies=list(bodies),
+            tokens=set(tokens),
+            out=str(out_dir),
+            combine=combine,
+            mode=mode,
+            language=language,
+        )
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        written = []
+        for index in range(len(bodies)):
+            pdf = out / f"D{index + 1}.pdf"
+            pdf.write_bytes(b"%PDF-1.7\n")
+            written.append(pdf)
+        return written
+
+    monkeypatch.setattr(batch_mod, "render_pdfs", fake_render)
+    return recorded
+
+
+def test_anon_pdf_option_hands_off_placeholder_pdfs(tmp_path, monkeypatch):
+    recorded = _record_pdf_render(monkeypatch)
+    doc1, doc2 = _make_docs(tmp_path)
+    out_dir = tmp_path / "out"
+    output = _run(["did", "anon", str(doc1), str(doc2), "-o", str(out_dir), "--pdf"])
+
+    pdf_dir = out_dir / "pdf"
+    assert (pdf_dir / "D1.pdf").exists()
+    assert (pdf_dir / "D2.pdf").exists()
+    assert recorded["mode"] == "placeholder"
+    assert recorded["combine"] is False
+    assert recorded["language"] == "en"
+    # The handoff folder is PDFs only: no key set, no config, no Typst sources.
+    assert not list(pdf_dir.glob("*.yaml"))
+    assert not list(pdf_dir.glob("*.typ"))
+    assert "Importable PDFs" in output
+
+
+def test_anon_render_option_selects_the_label_mode(tmp_path, monkeypatch):
+    recorded = _record_pdf_render(monkeypatch)
+    doc1, _ = _make_docs(tmp_path)
+    out_dir = tmp_path / "out"
+    _run(
+        [
+            "did",
+            "anon",
+            str(doc1),
+            "-o",
+            str(out_dir),
+            "--pdf",
+            "--render",
+            "redacted",
+        ]
+    )
+    assert recorded["mode"] == "redacted"
+
+
+def test_anon_pdf_is_off_by_default(tmp_path, monkeypatch):
+    recorded = _record_pdf_render(monkeypatch)
+    doc1, _ = _make_docs(tmp_path)
+    out_dir = tmp_path / "out"
+    _run(["did", "anon", str(doc1), "-o", str(out_dir)])
+
+    assert recorded == {}
+    assert not (out_dir / "pdf").exists()
+
+
+def test_anon_no_inputs_exits_nonzero(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
     old_argv = sys.argv
-    sys.argv = ["did", "batch", str(empty), "-o", str(tmp_path / "out")]
+    sys.argv = ["did", "anon", str(empty), "-o", str(tmp_path / "out")]
     from did.cli import main
 
     try:
@@ -134,12 +245,12 @@ def test_batch_no_inputs_exits_nonzero(tmp_path):
                 main()
             except SystemExit as e:
                 exited = e.code not in (None, 0)
-        assert exited, "batch with no input documents should exit non-zero"
+        assert exited, "anon with no input documents should exit non-zero"
     finally:
         sys.argv = old_argv
 
 
-def test_batch_writes_verification_beside_the_keys_not_the_tokens(tmp_path):
+def test_anon_writes_sweep_beside_the_keys_not_the_tokens(tmp_path):
     """The full report quotes the PII it found, so it belongs with the keys.
 
     Placing it in ``anon/`` would make the report itself the leak it warns
@@ -147,21 +258,23 @@ def test_batch_writes_verification_beside_the_keys_not_the_tokens(tmp_path):
     """
     doc1, doc2 = _make_docs(tmp_path)
     out_dir = tmp_path / "out"
-    _run(["did", "batch", str(doc1), str(doc2), "-o", str(out_dir)])
+    _run(["did", "anon", str(doc1), str(doc2), "-o", str(out_dir)])
 
     anon = out_dir / "anon"
     keys = out_dir / "keys"
 
-    report = json.loads((keys / "verification.json").read_text())
+    report = json.loads((keys / "sweep.json").read_text())
     assert report["schema_version"] == 1
     assert report["deep"] is True
-    assert set(report) >= {"leaks", "suspected", "retained", "clean", "findings"}
+    # No "clean"/"verified" verdict — counts are data, not a stamp.
+    assert set(report) >= {"leaks", "suspected", "retained", "findings"}
+    assert "clean" not in report
 
     # anon/ carries counts and locations only — never the offending text.
     manifest = json.loads((anon / "manifest.json").read_text())
-    summary = manifest["verification"]
+    summary = manifest["sweep"]
     assert summary["leaks"] == report["leaks"]
-    assert summary["clean"] == report["clean"]
+    assert "clean" not in summary
     for finding in summary["findings"]:
         assert "text" not in finding
         assert "context" not in finding
@@ -170,7 +283,7 @@ def test_batch_writes_verification_beside_the_keys_not_the_tokens(tmp_path):
     assert "Jane Roe" not in raw
 
 
-def test_batch_reports_a_surviving_identifier_without_failing(tmp_path):
+def test_anon_reports_a_surviving_identifier_without_failing(tmp_path):
     """A leak is reported loudly, but never turns into a non-zero exit.
 
     DID over-detects by design, so failing the command would turn expected
@@ -181,18 +294,18 @@ def test_batch_reports_a_surviving_identifier_without_failing(tmp_path):
     # the replacer anchors single-token names with \b.
     doc.write_text("John Doe underskrev. Doesagen blev afgjort i dag.")
     out_dir = tmp_path / "out"
-    output = _run(["did", "batch", str(doc), "-o", str(out_dir), "-l", "da"])
+    output = _run(["did", "anon", str(doc), "-o", str(out_dir), "-l", "da"])
 
     body = (out_dir / "anon" / "D1.typ").read_text()
     assert "Doesagen" in body, "replacement was expected to leave this behind"
 
-    report = json.loads((out_dir / "keys" / "verification.json").read_text())
-    assert report["clean"] is False
+    report = json.loads((out_dir / "keys" / "sweep.json").read_text())
+    assert report["leaks"] >= 1
     assert any(
         f["kind"] == "surviving_variant" and f["text"] == "Doe"
         for f in report["findings"]
     )
-    assert "surviving identifier" in output
+    assert "known survivor" in output
 
 
 # ------------------------------------------------------- document titles ---
@@ -208,7 +321,7 @@ def _make_identifying_docs(tmp_path):
 def test_anon_filenames_do_not_carry_the_source_name(tmp_path):
     doc1, doc2 = _make_identifying_docs(tmp_path)
     out_dir = tmp_path / "out"
-    _run(["did", "batch", str(doc1), str(doc2), "-o", str(out_dir)])
+    _run(["did", "anon", str(doc1), str(doc2), "-o", str(out_dir)])
 
     anon = out_dir / "anon"
     assert (anon / "D1.typ").exists()
@@ -220,7 +333,7 @@ def test_no_source_filename_appears_anywhere_under_anon(tmp_path):
     """The agent-safe tree must not leak a title any more than a body."""
     doc1, doc2 = _make_identifying_docs(tmp_path)
     out_dir = tmp_path / "out"
-    _run(["did", "batch", str(doc1), str(doc2), "-o", str(out_dir)])
+    _run(["did", "anon", str(doc1), str(doc2), "-o", str(out_dir)])
 
     for path in (out_dir / "anon").rglob("*"):
         if path.is_file():
@@ -234,7 +347,7 @@ def test_no_source_filename_appears_anywhere_under_anon(tmp_path):
 def test_combined_document_is_chaptered_by_title_token(tmp_path):
     doc1, doc2 = _make_identifying_docs(tmp_path)
     out_dir = tmp_path / "out"
-    _run(["did", "batch", str(doc1), str(doc2), "-o", str(out_dir), "--combine"])
+    _run(["did", "anon", str(doc1), str(doc2), "-o", str(out_dir), "--combine"])
 
     combined = (out_dir / "anon" / "combined.typ").read_text()
     assert "= #(DOC1V1)" in combined
@@ -246,7 +359,7 @@ def test_title_tokens_resolve_through_the_shared_vars(tmp_path):
     """Titles are first-class tokens: render_real.typ compiles to real names."""
     doc1, doc2 = _make_identifying_docs(tmp_path)
     out_dir = tmp_path / "out"
-    _run(["did", "batch", str(doc1), str(doc2), "-o", str(out_dir)])
+    _run(["did", "anon", str(doc1), str(doc2), "-o", str(out_dir)])
 
     keys = out_dir / "keys"
     real = (keys / "shared_vars.typ").read_text()
@@ -263,7 +376,7 @@ def test_title_tokens_resolve_through_the_shared_vars(tmp_path):
 def test_manifest_lists_the_safe_document_names(tmp_path):
     doc1, doc2 = _make_identifying_docs(tmp_path)
     out_dir = tmp_path / "out"
-    _run(["did", "batch", str(doc1), str(doc2), "-o", str(out_dir)])
+    _run(["did", "anon", str(doc1), str(doc2), "-o", str(out_dir)])
 
     manifest = json.loads((out_dir / "anon" / "manifest.json").read_text())
     assert manifest["documents"] == ["D1.typ", "D2.typ"]
@@ -275,7 +388,7 @@ def test_title_mentioned_inside_a_body_is_tokenized_too(tmp_path):
     doc = tmp_path / "John_Doe_kontrakt_2024.md"
     doc.write_text("See John_Doe_kontrakt_2024.md for the signed agreement.")
     out_dir = tmp_path / "out"
-    _run(["did", "batch", str(doc), "-o", str(out_dir)])
+    _run(["did", "anon", str(doc), "-o", str(out_dir)])
 
     body = (out_dir / "anon" / "D1.typ").read_text()
     assert "John_Doe_kontrakt_2024.md" not in body
