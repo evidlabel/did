@@ -1,9 +1,10 @@
-"""Run spaCy detection in a child process so it cannot stall the Qt event loop.
+"""Run document analysis in a child process so it cannot stall the page.
 
-spaCy's Cython inference holds the GIL for long stretches. A ``QThread`` that
-calls it therefore still freezes the GUI: the worker thread owns the GIL and the
-Qt event loop never gets a turn. A child process has its own interpreter and its
-own GIL, so the window stays responsive while detection runs.
+spaCy's Cython inference holds the GIL for long stretches. A thread in this
+process that calls it freezes every request the page is waiting on, even when
+that thread is not the one that accepted the request. A child process has its
+own interpreter and its own GIL, so the page stays responsive while detection,
+settling, and source hashing run.
 
 The process is started lazily and reused, so the language model is loaded once
 per (language, profile). All results cross the boundary as plain picklable data
@@ -97,21 +98,18 @@ def ensure_started():
         return _process is not None
 
 
-def run_detection(
-    texts, language, detection_profile, not_names, *, work=None, timeout=None
-):
-    """Detect, pseudonymize, and verify in the child; block until it is done.
+def run_job(work, args, *, timeout=None):
+    """Run ``work(*args)`` in the child and block the caller until it returns.
 
-    Called from a worker thread, so blocking here does not touch the GUI. The
-    child must already be running (see :func:`ensure_started`); the child never
-    runs two requests at once.
+    The caller is a worker thread. The child has its own interpreter, so spaCy
+    and text extraction there cannot hold this process's GIL or the GUI thread.
+    The child must already be running (see :func:`ensure_started`).
     """
-    work = work or _detect_work
     timeout = _DETECTION_TIMEOUT_S if timeout is None else timeout
     with _lock:
         if _process is None or not _process.is_alive():
             raise RuntimeError("Detection process is not running.")
-        _requests.put((work, (texts, language, detection_profile, list(not_names))))
+        _requests.put((work, tuple(args)))
         try:
             kind, payload = _responses.get(timeout=timeout)
         except Exception as exc:
@@ -121,6 +119,99 @@ def run_detection(
     if kind == "error":
         raise RuntimeError(payload)
     return payload
+
+
+def run_detection(
+    texts, language, detection_profile, not_names, *, work=None, timeout=None
+):
+    """Detect, pseudonymize, and verify in the child; block until it is done."""
+    work = work or _detect_work
+    return run_job(
+        work,
+        (texts, language, detection_profile, list(not_names)),
+        timeout=timeout,
+    )
+
+
+def extract_documents(paths):
+    """Child work: read the documents and return readings. No detection.
+
+    The parent caches these and can show the source text while detection runs
+    in a later job. Keys are the path strings the parent sent.
+    """
+    from . import pipeline
+
+    readings = {}
+    for raw in paths:
+        readings[str(raw)] = pipeline.extract_one(raw)
+    return readings
+
+
+def extract_and_detect(paths, language, detection_profile, not_names):
+    """Child work: read the documents, then detect. No review merge."""
+    from pathlib import Path
+
+    readings = {Path(key): reading for key, reading in extract_documents(paths).items()}
+    texts = {path: reading.text for path, reading in readings.items()}
+    yaml_str, anonymized, report = _detect_work(
+        texts, language, detection_profile, not_names
+    )
+    return readings, yaml_str, anonymized, report
+
+
+def settle_detected(
+    language,
+    detection_profile,
+    yaml_str,
+    anonymized,
+    report,
+    review,
+    readings,
+    texts,
+    not_names,
+    force,
+):
+    """Child work: merge the review and re-pseudonymize. Regex only, no spaCy."""
+    from did.core.anonymizer import Anonymizer
+
+    from . import pipeline
+
+    anonymizer = Anonymizer.for_regex_only(language, detection_profile)
+    return pipeline.settle_detection(
+        anonymizer,
+        yaml_str,
+        anonymized,
+        report,
+        review,
+        readings,
+        texts,
+        not_names,
+        force,
+    )
+
+
+def rewrite_with_keys(language, detection_profile, yaml_text, texts, not_names):
+    """Child work: pseudonymize and verify a reviewed config. Regex only, no spaCy."""
+    from did.core.anonymizer import Anonymizer
+
+    from . import pipeline
+
+    anonymizer = Anonymizer.for_regex_only(language, detection_profile)
+    anonymized = pipeline.pseudonymize_all(anonymizer, yaml_text, texts)
+    report = pipeline.verify_outputs(yaml_text, anonymized, not_names)
+    return anonymized, report
+
+
+def hash_sources(paths):
+    """Child work: digest sources so the parent process does not read them."""
+    from pathlib import Path
+
+    from .syncstate import source_digest
+
+    cache = {}
+    for raw in paths:
+        source_digest(Path(raw), cache)
+    return cache
 
 
 def _discard_process():

@@ -1,19 +1,14 @@
-"""Optional install extras: gui (PySide6). Language models are extra `models`."""
+"""Optional install extras.
 
-from __future__ import annotations
-
-import importlib.util
-
-GUI_INSTALL = (
-    "GUI requires the gui extra. "
-    'Install with: uv tool install "did[gui] @ git+https://github.com/evidlabel/did.git"'
-)
+The GUI is a local page served by the stdlib. ``gui`` stays as an empty extra
+so existing ``did[gui]`` installs keep resolving. Language models are extra
+``models``.
+"""
 
 
 def has_gui() -> bool:
-    return importlib.util.find_spec("PySide6") is not None
+    return True
 
 
 def require_gui() -> None:
-    if not has_gui():
-        raise ImportError(GUI_INSTALL)
+    return None

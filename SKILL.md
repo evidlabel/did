@@ -28,7 +28,7 @@ The loop is a map you review, then apply: **extract → fix the map → anon →
 1. **Extract.** `did extract <in> -c <case>.yaml` (add `-l da` / `-l sv`). Detection writes one YAML map.
 2. **Fix the map.** Over-removal wins: merge variants of one identity, drop trivial entries (single letters, stray numbers) that would mangle the text, add what detection missed.
    - Local model available → it fixes the map here.
-   - No model → a human edits the YAML, or reviews in `did gui` (extra `did[gui]`).
+   - No model → a human edits the YAML, or reviews in `did gui` (the did-app window, or the browser).
    - Neither → still continue, but record the output as **unreviewed**: run `evid --db evid tag assign <uuid> unreviewed` for each source document already in the case set, and say so in the report. evid stores that tag as `<slug>.unreviewed`. The handoff PDFs are not evid documents, so they have no uuid to tag.
 3. **Anon.** `did anon <in> -c <case>.yaml -o <out> --pdf`. Applies the reviewed map with no re-detection. Writes `<out>/anon/` (token-only Typst), `<out>/keys/` (secret), and `<out>/pdf/` (handoff). Without `-c` it detects and pseudonymizes in one pass. Inputs may be files or directories (`.pdf`, `.docx`, and common text formats).
 4. **Check the output, then hand off `<out>/pdf/`.** `anon` prints an automated sweep and records counts in `anon/manifest.json` (full report in `keys/sweep.json`). The sweep is mechanical — it cannot judge re-identifying context — so it is an **aid to your review, never a substitute: read the tokens yourself.** `--pdf` compiles one placeholder PDF per document (`D1.pdf`, or `combined.pdf` with `--combine`); every identifier is written out as a label (`[PERSON 1]`, `[DOCUMENT 1]`, and the same for the other types). `pdf/` holds PDFs and nothing else — no key set, no config — so it is safe to share and `evid --db evid doc add <out>/pdf` ingests it as ordinary documents. `--render redacted|synthetic` changes the labels; `placeholder` is the default. `<out>/anon/` stays the token-only Typst for a text-only agent; it is not PDFs, so `doc add` refuses it — pass `pdf/` instead.
@@ -53,7 +53,7 @@ The handoff is `pdf/` (or the GUI Markdown/JSON/ZIP export). `keys/` and the GUI
 uv tool install 'did[models] @ git+https://github.com/evidlabel/did.git'
 ```
 
-`did[gui]` for human review, or `did[all]`.
+`did gui` for human review. The preview shows source text with an UNANON marker until detection replaces it; that view is not the handoff. The agent pane on the right defaults to `ocprofile launch local-qw38` in the project folder (a local model; the saved OpenCode profile stays as it is). Do not paste source text into that terminal. Selection sends the pseudonymized preview only, and refuses the UNANON view. Check pseudonymization → sends the keyword YAML (`draft/entities.yaml`) to that local agent to look for non-PII to remove and entries to combine. The agent replies in the terminal and does not rewrite the keys file. That YAML is not a remote handoff: `keys/` stays on the device. `did[gui]` is an empty extra; `did[all]` adds every language model.
 
 ## Limits
 

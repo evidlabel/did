@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>did gui</title>
+<link rel="stylesheet" href="/vendor/xterm.css">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f6f8; --panel: #fff; --panel2: #e8eef2; --fg: #1c242b; --muted: #5d6b76;
+  --line: #d3dde3; --accent: #1c4a5c; --accent-fg: #f4f7f8; --accent-hover: #163e4e;
+  --sel: #d5e6ee; --hover: #eef3f6;
+  --control: #fff; --control-line: #6d7d89; --control-hover: #d5e6ee;
+  --err: #8d1d18; --ok: #1d6b3a; --warn: #8a5a00;
+  --mono: ui-monospace, "DejaVu Sans Mono", monospace;
+  --p-P: #0050b3; --p-O: #a33a00; --p-E: #0a7d72; --p-A: #8a6d00; --p-PH: #7a2da0;
+  --p-DT: #7a2da0; --p-ID: #b3261e; --p-CD: #b3261e; --p-GN: #b3261e; --p-URL: #3a7d1e; --p-DOC: #5a6472; --p-W: #0050b3;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #161b1f; --panel: #1e252b; --panel2: #273038; --fg: #e6ecef; --muted: #9aab86;
+    --line: #3a4650; --accent: #8ec5d6; --accent-fg: #102026; --accent-hover: #b7dbe6;
+    --sel: #2c4654; --hover: #2a343c;
+    --control: #3c4b58; --control-line: #8ea6b6; --control-hover: #4a5c6b;
+    --err: #ff8a80; --ok: #8fd6a6; --warn: #e6c35c;
+    --p-P: #6ab0f3; --p-O: #ff9f6e; --p-E: #5ed1c4; --p-A: #e6c07b; --p-PH: #c98bda;
+    --p-DT: #c98bda; --p-ID: #e06c75; --p-CD: #e06c75; --p-GN: #e06c75; --p-URL: #98c379; --p-DOC: #8a93a5; --p-W: #6ab0f3;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+button, input, select, textarea {
+  font: inherit; color: var(--fg); background: var(--control);
+  border: 1px solid var(--control-line); border-radius: 5px;
+  appearance: none;
+}
+button { padding: 3px 10px; }
+button:hover:not(:disabled):not(.tok) { background: var(--control-hover); }
+button:disabled { opacity: .45; }
+button.on, button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button.on:hover:not(:disabled), button.primary:hover:not(:disabled) {
+  background: var(--accent-hover); color: var(--accent-fg); border-color: var(--accent-hover);
+}
+input, textarea, select { padding: 3px 6px; }
+select {
+  padding-right: 1.6em;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 12px) calc(50% - 1px), calc(100% - 7px) calc(50% - 1px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+select option { background: var(--control); color: var(--fg); }
+button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+#app { display: flex; height: 100vh; }
+#side { width: 280px; flex: none; background: var(--panel2); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+#brand { padding: 10px 12px 4px; font-weight: 700; }
+#side-actions { display: flex; gap: 6px; padding: 0 8px 8px; }
+#side-actions button { flex: 1; }
+#project-name { color: var(--muted); font-size: 12px; padding: 0 12px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#menubar { display: flex; gap: 2px; padding: 2px 6px; background: var(--panel2); border-bottom: 1px solid var(--line); }
+#menubar > button { background: transparent; border-color: transparent; font-weight: 600; }
+#tree { flex: 1; overflow: auto; padding: 4px 8px 8px; }
+.project { margin-bottom: 8px; }
+.row { padding: 3px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+.row:hover { background: var(--hover); }
+.row.sel, .project.active > .row { background: var(--sel); }
+.row.child { padding-left: 18px; }
+.row.missing { color: var(--err); }
+.row.muted, .row.link { color: var(--muted); }
+.mark { display: inline-block; width: 1.2em; }
+#main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#toolbar, #findbar, #entity-tools { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--panel2); flex-wrap: wrap; }
+#check-pseudo { margin-left: auto; }
+#preview-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#preview-head { display: flex; gap: 8px; align-items: center; padding: 4px 8px; }
+#badge { font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 1px 6px; border-radius: 4px; background: var(--panel2); }
+#badge[data-state="RAW"],
+#badge[data-state="UNANON"] { background: #ffd8c2; color: #7a2500; }
+#badge[data-state="PSEUDONYMIZED"] { background: #ccebd6; color: #145c2e; }
+#badge[data-state="REDACTED"] { background: #f2d4b5; color: #5b2500; }
+#badge[data-state="SYNTHETIC"] { background: #ded0f5; color: #3e246b; }
+#badge[data-state="VERSION"] { background: #d5e8f6; color: #234e70; }
+#preview { flex: 1; margin: 0; overflow: auto; padding: 10px 12px; white-space: pre-wrap; font-family: var(--mono); background: var(--panel); }
+button.tok { border: 0; background: transparent; padding: 0 1px; font-family: var(--mono); cursor: pointer; }
+.p-P { color: var(--p-P); } .p-O { color: var(--p-O); } .p-E { color: var(--p-E); }
+.p-A { color: var(--p-A); } .p-PH { color: var(--p-PH); } .p-DT { color: var(--p-DT); }
+.p-ID { color: var(--p-ID); } .p-CD { color: var(--p-CD); } .p-GN { color: var(--p-GN); }
+.p-URL { color: var(--p-URL); } .p-DOC { color: var(--p-DOC); } .p-W { color: var(--p-W); }
+#entities-pane { width: 420px; flex: none; border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
+#entities { width: 100%; border-collapse: collapse; }
+#entities th, #entities td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+#entities tr.sel { background: var(--sel); }
+#entities tr.hit { outline: 2px solid var(--accent); }
+#entities tr.child td { color: var(--muted); }
+#entity-scroll { flex: 1; overflow: auto; }
+#keys, #status { color: var(--muted); font-size: 12px; padding: 4px 8px; }
+#keys-folder { padding: 1px 8px; }
+#status.err { color: var(--err); }
+#status-bar { display: flex; gap: 8px; border-top: 1px solid var(--line); align-items: center; }
+#status { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu { position: fixed; z-index: 5; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px; display: flex; flex-direction: column; min-width: 180px; box-shadow: 0 8px 24px #0003; }
+.menu button { text-align: left; background: transparent; border-color: transparent; }
+#modal { position: fixed; inset: 0; background: #0006; display: flex; align-items: center; justify-content: center; }
+#modal-card { background: var(--panel); color: var(--fg); width: min(520px, 92vw); max-height: 80vh; overflow: auto; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+#modal-body label { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
+#modal-body input, #modal-body textarea { width: 100%; }
+#fs { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow: auto; }
+#fs button.on { border-color: var(--accent); }
+.findings { white-space: pre-wrap; font-family: var(--mono); font-size: 12px; }
+#read-only { color: var(--warn); font-weight: 700; }
+#menubar #b-term { margin-left: auto; }
+#b-term.on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+#divider2 { width: 5px; cursor: col-resize; flex: none; background: var(--line); }
+#divider2:hover { background: var(--accent); }
+#termpane { width: var(--term-w, 480px); min-width: 280px; max-width: 72vw; flex: none; display: flex; flex-direction: column; background: var(--bg); border-left: 1px solid var(--line); min-height: 0; }
+.tbar { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--panel2); flex-wrap: wrap; }
+.tbar b { margin-right: auto; }
+#t-preset { max-width: 220px; }
+#terms { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#tempty { padding: 14px 12px; color: var(--muted); display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.tsess { flex: 1 1 0; min-height: 90px; display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+.tsess:first-child { border-top: 0; }
+.thead { display: flex; gap: 6px; align-items: center; padding: 2px 6px 2px 10px; background: var(--panel2); border-bottom: 1px solid var(--line); }
+.thead b { font-family: var(--mono); font-weight: normal; color: var(--muted); margin-right: auto; }
+.tsess.active .thead b { color: var(--accent); font-weight: 700; }
+.thead button { padding: 0 7px; border-color: transparent; background: transparent; }
+.tdot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; flex: none; }
+.tdot.live { background: var(--ok); }
+.tdot.ended { background: var(--warn); }
+.tbody { flex: 1; min-height: 0; padding: 4px 0 0 8px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <div id="brand">did</div>
+    <div id="project-name"></div>
+    <div id="side-actions">
+      <button id="side-new" type="button">New</button>
+      <button id="side-open" type="button">Open</button>
+    </div>
+    <div id="tree"></div>
+  </aside>
+  <main id="main">
+    <div id="menubar">
+      <button id="menu-file" type="button">File</button>
+      <button id="menu-help" type="button">Help</button>
+      <button id="b-term" type="button" title="Agent pane: a terminal in the open project's folder. The default command is a local OpenCode pairing.">Agent</button>
+    </div>
+    <div id="toolbar">
+      <button id="add" type="button">Add documents</button>
+      <button id="redetect" type="button" title="Documents are processed automatically when added. Re-run detection after changing language or detection settings.">Re-run detection</button>
+      <label title="Language used to detect names, addresses, dates, and other entities.">Language <select id="lang"><option value="da">Danish</option><option value="en">English</option><option value="sv">Swedish</option></select></label>
+      <label title="Thorough prioritizes detection coverage; Balanced uses fewer resources.">Detection <select id="profile"><option value="thorough">Thorough</option><option value="balanced">Balanced</option></select></label>
+      <label title="Changes how reviewed identities appear in previews and LLM handoffs.">Preview <select id="format"><option value="typst">Typst #(P1V1)</option><option value="plain">Plain [PERSON 1]</option><option value="redacted">Redacted</option><option value="synthetic">Synthetic (Faker)</option></select></label>
+      <button id="original" type="button" title="Show the unanonymized source text of the current document. It contains personal data. LLM handoff still copies the pseudonymized text.">Original</button>
+      <button id="find" type="button">Find</button>
+      <span id="read-only" hidden>READ-ONLY</span>
+      <label title="Write the pseudonymized output for this project. It replaces the previous output.">Save <select id="save-mode"><option value="multi">Multi (separate files)</option><option value="single">Single (combined)</option><option value="pdf">PDFs (via Typst)</option></select></label>
+      <button id="save" type="button" class="primary" title="Write the pseudonymized output for this project. It replaces the previous output.">Save output</button>
+      <button id="handoff" type="button" title="Copy or package reviewed pseudonymized documents for an LLM session. Identity mappings are never included.">LLM handoff</button>
+    </div>
+    <div id="findbar" hidden>
+      <input id="find-q" type="text" placeholder="Find in document">
+      <button id="find-prev" type="button">Previous</button>
+      <button id="find-next" type="button">Next</button>
+    </div>
+    <div id="preview-wrap">
+      <div id="preview-head"><span id="badge"></span><span id="doc-name"></span><span id="busy" hidden></span></div>
+      <pre id="preview"></pre>
+    </div>
+    <div id="status-bar"><div id="keys"></div><button id="keys-folder" type="button" title="Show the keys file’s folder in the file manager.">Open folder</button><div id="status"></div></div>
+  </main>
+  <aside id="entities-pane">
+    <div id="entity-tools">
+      <input id="entity-search" type="text" placeholder="Filter identities">
+      <select id="entity-type"><option value="">All types</option><option>PERSON</option><option>ORGANIZATION</option><option>LOCATION</option><option>EMAIL_ADDRESS</option><option>PHONE_NUMBER</option><option>DATE_NUMBER</option><option>ID_NUMBER</option><option>CODE_NUMBER</option><option>GENERAL_NUMBER</option><option>URL</option></select>
+      <select id="type-target"><option>PERSON</option><option>ORGANIZATION</option><option>LOCATION</option><option>EMAIL_ADDRESS</option><option>PHONE_NUMBER</option></select>
+      <button id="type-change" type="button">Change type</button>
+      <button id="add-variant" type="button">Add variant</button>
+      <button id="merge" type="button">Merge</button>
+      <button id="not-name" type="button">Do not pseudonymize</button>
+      <button id="from-selection" type="button">Create from selection</button>
+      <button id="check-pseudo" type="button" title="Send the keyword YAML to the agent on the right. It looks for non-PII to remove and entries to combine.">Check pseudonymization →</button>
+    </div>
+    <div id="entity-error"></div>
+    <div id="entity-scroll">
+      <table id="entities">
+        <thead><tr><th>Type</th><th>#</th><th>Variants</th><th>Conf</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </aside>
+  <div id="divider2" hidden></div>
+  <aside id="termpane" hidden>
+    <div class="tbar">
+      <b id="t-title">Agent</b>
+      <select id="t-preset" title="Local OpenCode pairing for new terminals. This does not change your saved OpenCode profile."></select>
+      <button id="t-sel" type="button" title="Type the pseudonymized preview into the terminal. Original text and the identity map are not sent.">Selection</button>
+      <button id="t-ext" type="button" hidden title="Open the agent in a separate terminal window">Terminal</button>
+      <button id="t-add" type="button" title="Add a terminal: a shell, or an agent command">+</button>
+      <button id="t-close" type="button" title="Hide the pane. Sessions keep running.">›</button>
+    </div>
+    <div id="tempty" hidden>
+      <span id="tempty-msg"></span>
+      <span>
+        <button id="t-start" type="button" class="primary"></button>
+        <button id="t-agent" type="button">Add an agent</button>
+      </span>
+    </div>
+    <div id="terms"></div>
+  </aside>
+</div>
+<div id="modal" hidden>
+  <div id="modal-card">
+    <b id="modal-title"></b>
+    <div id="modal-body"></div>
+    <div>
+      <button id="modal-ok" type="button" class="primary">OK</button>
+      <button id="modal-cancel" type="button">Cancel</button>
+    </div>
+  </div>
+</div>
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
+<script src="/page.js"></script>
+</body>
+</html>

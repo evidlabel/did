@@ -49,6 +49,13 @@ def test_run_detection_requires_a_started_child():
         )
 
 
+def test_extract_documents_reads_without_detecting(tmp_path):
+    path = tmp_path / "letter.txt"
+    path.write_text("John Doe met Jane Roe.", encoding="utf-8")
+    readings = detect_process.extract_documents([str(path)])
+    assert readings[str(path)].text == "John Doe met Jane Roe."
+
+
 def test_regex_only_anonymizer_needs_no_model():
     anonymizer = Anonymizer.for_regex_only("da", "thorough")
     anonymizer.load_replacements(
