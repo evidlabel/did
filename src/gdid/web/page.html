@@ -18,7 +18,7 @@
   --p-DT: #7a2da0; --p-ID: #b3261e; --p-CD: #b3261e; --p-GN: #b3261e; --p-URL: #3a7d1e; --p-DOC: #5a6472; --p-W: #0050b3;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     color-scheme: dark;
     --bg: #161b1f; --panel: #1e252b; --panel2: #273038; --fg: #e6ecef; --muted: #9aab86;
     --line: #3a4650; --accent: #8ec5d6; --accent-fg: #102026; --accent-hover: #b7dbe6;
@@ -28,6 +28,16 @@
     --p-P: #6ab0f3; --p-O: #ff9f6e; --p-E: #5ed1c4; --p-A: #e6c07b; --p-PH: #c98bda;
     --p-DT: #c98bda; --p-ID: #e06c75; --p-CD: #e06c75; --p-GN: #e06c75; --p-URL: #98c379; --p-DOC: #8a93a5; --p-W: #6ab0f3;
   }
+}
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #161b1f; --panel: #1e252b; --panel2: #273038; --fg: #e6ecef; --muted: #9aab86;
+    --line: #3a4650; --accent: #8ec5d6; --accent-fg: #102026; --accent-hover: #b7dbe6;
+    --sel: #2c4654; --hover: #2a343c;
+    --control: #3c4b58; --control-line: #8ea6b6; --control-hover: #4a5c6b;
+    --err: #ff8a80; --ok: #8fd6a6; --warn: #e6c35c;
+    --p-P: #6ab0f3; --p-O: #ff9f6e; --p-E: #5ed1c4; --p-A: #e6c07b; --p-PH: #c98bda;
+    --p-DT: #c98bda; --p-ID: #e06c75; --p-CD: #e06c75; --p-GN: #e06c75; --p-URL: #98c379; --p-DOC: #8a93a5; --p-W: #6ab0f3;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -136,6 +146,9 @@ button.tok { border: 0; background: transparent; padding: 0 1px; font-family: va
 .tdot.live { background: var(--ok); }
 .tdot.ended { background: var(--warn); }
 .tbody { flex: 1; min-height: 0; padding: 4px 0 0 8px; }
+body.embed #side-actions { display: none; }  /* the workbench opens this case's project; no switching */
+#to-evid-state { font-size: 12px; }
+#to-evid.pending { border-color: var(--warn); color: var(--warn); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -167,6 +180,8 @@ button.tok { border: 0; background: transparent; padding: 0 1px; font-family: va
       <label title="Write the pseudonymized output for this project. It replaces the previous output.">Save <select id="save-mode"><option value="multi">Multi (separate files)</option><option value="single">Single (combined)</option><option value="pdf">PDFs (via Typst)</option></select></label>
       <button id="save" type="button" class="primary" title="Write the pseudonymized output for this project. It replaces the previous output.">Save output</button>
       <button id="handoff" type="button" title="Copy or package reviewed pseudonymized documents for an LLM session. Identity mappings are never included.">LLM handoff</button>
+      <button id="to-evid" type="button" title="Put the reviewed documents into the case's evid set as placeholder PDFs ([PERSON 1]); a later handoff replaces them in place.">Hand off to evid</button>
+      <span id="to-evid-state" class="muted"></span>
     </div>
     <div id="findbar" hidden>
       <input id="find-q" type="text" placeholder="Find in document">

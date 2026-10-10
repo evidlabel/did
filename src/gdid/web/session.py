@@ -22,6 +22,7 @@ from did.core.anonymizer import MODELS_INSTALL_HINT, Anonymizer
 from did.core.entity_types import ENTITY_TYPES
 
 from .. import detect_process, pipeline
+from .. import handoff as handoff_mod
 from ..project import (
     ENTITIES_FILENAME,
     Project,
@@ -1133,6 +1134,7 @@ class Session:
             self.keys_origin,
             self._preview_epoch,
             tuple(sorted((self.project.metadata if self.project else {}).items())),
+            self._handoff_mark(),
         )
 
     def _compose_state(self) -> dict:
@@ -1172,12 +1174,132 @@ class Session:
             ),
             "read_only": self.viewing_version is not None,
             "metadata": self.project.metadata if self.project else {},
+            "handoff": self._handoff_state(),
             "version": __version__,
             "directories": {
                 "projects": self.settings.directory("projects"),
                 "sources": self.settings.directory("sources"),
             },
         }
+
+    # -------------------------------------------------------------- handoff ---
+    def _handoff_docs(self) -> list[tuple[str, str, str]]:
+        """(source key, title token, token-only body) for every pseudonymized document."""
+        return [
+            (str(path), self._title_token(index), self.anonymized[path])
+            for index, path in enumerate(self._llm_paths(), 1)
+        ]
+
+    def _handoff_mark(self):
+        if self.project is None or self.project.workdir is None:
+            return None
+        try:
+            return (self.project.workdir / "draft" / handoff_mod.STATE).stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def _handoff_state(self) -> dict:
+        """What the window (and the workbench badge) shows about the evid handoff."""
+        if self.project is None or self.project.workdir is None:
+            return {"set": "", "pending": 0, "at": 0, "handed": 0}
+        state = handoff_mod.read_state(self.project.workdir)
+        docs = self._handoff_docs()
+        return {
+            "set": state["set"] or (self.project.metadata or {}).get("evid_set", ""),
+            "at": state["at"],
+            "handed": len(state["docs"]),
+            "pending": handoff_mod.pending(self.project.workdir, docs),
+        }
+
+    def handoff(self, set_slug: str = "") -> dict:
+        """Render the pseudonymized documents as placeholder PDFs and put them in evid."""
+        self._wait_until_preview()
+        with self.lock:
+            if self.project is None or self.project.workdir is None:
+                raise ApiError("Open or save a project before handing off.")
+            if self.viewing_version is not None:
+                raise ApiError("Return to the draft before handing off.")
+            slug = (set_slug or "").strip() or handoff_mod.read_state(
+                self.project.workdir
+            )["set"]
+            slug = slug or (self.project.metadata or {}).get("evid_set", "")
+            if not slug:
+                raise ApiError(
+                    "Which evid set? Give the case's anon set, e.g. 2026-014-anon."
+                )
+            docs = self._handoff_docs()
+            if not docs:
+                raise ApiError("Nothing pseudonymized to hand off.")
+            if not self._publishable():
+                raise ApiError(self.status)
+            self._require_ack("Hand off to evid")
+            workdir, yaml_text, language = (
+                self.project.workdir,
+                self.yaml_text,
+                self.language,
+            )
+
+        def work():
+            return handoff_mod.handoff(workdir, docs, yaml_text, slug, language)
+
+        def apply(result):
+            stale = (
+                f", {result['stale']} label(s) to re-anchor"
+                if result.get("stale")
+                else ""
+            )
+            self.status = (
+                f"Handed off to evid {result['set']}: {result['added']} added, "
+                f"{result['replaced']} replaced, {result['unchanged']} unchanged{stale}."
+            )
+            self.error = None
+
+        self._start_job(f"Handing off {len(docs)} document(s) to evid…", work, apply)
+        return {"ok": True}
+
+    def ensure_project(self, path: str, name: str = "", evid_set: str = "") -> None:
+        """Open the project at PATH, or create one right there when PATH is empty.
+
+        The workbench gives every case its own did folder and opens it with this, so the
+        window always shows that case's project and nothing else."""
+        target = Path(path).expanduser().resolve()
+        if not str(path).strip():
+            raise ApiError("A project path is required.")
+        active = (
+            self.project.workdir.resolve()
+            if self.project is not None and self.project.workdir is not None
+            else None
+        )
+        if active != target:
+            if _project_file(target).is_file():
+                self.open_project(str(target))
+            else:
+                if target.exists() and any(target.iterdir()):
+                    raise ApiError(f"{target} is not empty and holds no did project.")
+                target.mkdir(parents=True, exist_ok=True)
+                with self.lock:
+                    self.generation += 1
+                    self.busy = None
+                    self._reset_documents()
+                    project = Project(
+                        name=(name or target.name).strip() or target.name,
+                        language=self.language or "da",
+                        detection_profile=self.detection_profile,
+                    )
+                    try:
+                        save_project(project, target)
+                    except ProjectError as exc:
+                        raise ApiError(str(exc)) from exc
+                    self.project = project
+                    self.output_mode = project.preview_format or "typst"
+                    self.settings.add_recent_project(project.project_file)
+                    self.status = f"{project.name} — add documents to begin."
+                    self.error = None
+        if evid_set and self.project is not None:
+            meta = dict(self.project.metadata or {})
+            if meta.get("evid_set") != evid_set:
+                meta["evid_set"] = evid_set
+                self.set_meta(meta)
 
     # ------------------------------------------------------------- projects ---
     def _reset_documents(self) -> None:

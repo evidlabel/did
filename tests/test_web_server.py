@@ -967,3 +967,46 @@ def test_terminal_websocket(client, tmp_path, monkeypatch):
     finally:
         sock.close()
         Handler.agents.stop()
+
+
+def test_ensure_project_creates_then_opens_the_case_folder(client, tmp_path):
+    """The workbench opens each case's own did folder: created when empty, opened after."""
+    case = tmp_path / "did" / "2026-014"
+    case.mkdir(parents=True)
+    status, _ = client.post(
+        "/api/project/ensure",
+        {"path": str(case), "name": "Tenancy dispute", "evid_set": "2026-014-anon"},
+    )
+    assert status == 200
+    state = client.wait()
+    assert (
+        state["workdir"] == str(case.resolve())
+        and state["project_name"] == "Tenancy dispute"
+    )
+    assert (case / "project.did-project.yaml").is_file()
+    assert state["metadata"]["evid_set"] == "2026-014-anon"
+    assert state["handoff"] == {
+        "set": "2026-014-anon",
+        "at": 0,
+        "handed": 0,
+        "pending": 0,
+    }
+    _add(client, tmp_path / "letter.txt", "Ole Hansen kept the deposit.")
+    state = client.wait()
+    assert (
+        state["handoff"]["pending"] == 1
+    )  # one document not handed off yet: the workbench badge
+    # opening again keeps it (no new project)
+    assert client.post("/api/project/ensure", {"path": str(case)})[0] == 200
+    assert client.wait()["workdir"] == str(case.resolve())
+    full = tmp_path / "busy"
+    (full / "x").mkdir(parents=True)
+    status, payload = client.post("/api/project/ensure", {"path": str(full)})
+    assert status == 400 and "not empty" in payload["error"]
+
+
+def test_handoff_needs_a_set(client, tmp_path):
+    _new(client, tmp_path / "projects")
+    _add(client, tmp_path / "a.txt", "Ole Hansen kept the deposit.")
+    status, payload = client.post("/api/handoff", {})
+    assert status == 400 and "Which evid set" in payload["error"]

@@ -23,6 +23,7 @@ from .typst_cleaning import typst_str_escape
 RENDER_MODES = ("placeholder", "redacted", "synthetic")
 
 _TOKEN_ID_RE = re.compile(r"([A-Z]+)(\d+)V(\d+)")
+_TITLE_TOKEN_RE = re.compile(r"#\(([A-Z]+\d+V\d+)\)")
 
 _FAKER_LOCALES = {"da": "da_DK", "sv": "sv_SE"}
 
@@ -90,12 +91,15 @@ def render_pdfs(
     mode="placeholder",
     language="en",
     seed="did",
+    titles=False,
 ):
     """Compile a placeholder PDF per document (or one combined) into *out_dir*.
 
     ``bodies`` is ``[(title_token, token_only_body), ...]`` as ``did anon``
     builds it. The Typst sources live in a temp dir, so *out_dir* receives only
-    the PDFs. Returns the paths written.
+    the PDFs. Returns the paths written. With *titles*, each PDF's title
+    metadata is its title token's label (``[DOCUMENT 1]``), which evid takes as
+    the document's title.
     """
     from .file_utils import compile_typst_pdf
 
@@ -118,8 +122,12 @@ def render_pdfs(
         else:
             for index, (title_token, body) in enumerate(bodies, 1):
                 main = build / f"D{index}.typ"
+                meta = ""
+                tid = _TITLE_TOKEN_RE.fullmatch(title_token.strip()) if titles else None
+                if tid and tid.group(1) in labels:
+                    meta = f"#set document(title: {tid.group(1)})\n"
                 main.write_text(
-                    f'#import "pdf_labels.typ": *\n\n= {title_token}\n\n{body}\n',
+                    f'#import "pdf_labels.typ": *\n{meta}\n= {title_token}\n\n{body}\n',
                     encoding="utf-8",
                 )
                 pdf = out_dir / f"D{index}.pdf"

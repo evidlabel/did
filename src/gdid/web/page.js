@@ -129,7 +129,27 @@ if (typeof module !== "undefined" && module.exports) {
 
 if (typeof document !== "undefined") {
   const $ = (id) => document.getElementById(id);
+  const params = new URLSearchParams(location.search);
+  const EMBED = params.get("embed") === "1";  // inside the workbench: one case, one project
+  if (EMBED) document.body.classList.add("embed");
+  function setForcedTheme(name) {  // "light" | "dark" from the workbench; else the system
+    if (name === "light" || name === "dark") document.documentElement.dataset.theme = name;
+    else delete document.documentElement.dataset.theme;
+    try {
+      for (const pane of T.list) pane.term.options.theme = termTheme();
+    } catch {
+      // the terminals are not set up yet (first call, at load)
+    }
+  }
+  setForcedTheme(params.get("theme"));
+  window.addEventListener("message", (event) => {
+    if (event.source === window.parent && event.data && event.data.type === "workbench-theme") {
+      setForcedTheme(event.data.theme);
+    }
+  });
+  if (window.parent !== window) window.parent.postMessage({ type: "workbench-hello" }, "*");
   const state = {
+    badge: -1,
     data: null,
     findFrom: 0,
     findQuery: "",
@@ -170,6 +190,16 @@ if (typeof document !== "undefined") {
     $("status").textContent = data.error ? data.error : data.status || "";
     $("status").classList.toggle("err", Boolean(data.error));
     $("project-name").textContent = data.project_name || "No project";
+    const ho = data.handoff || { pending: 0, set: "" };
+    $("to-evid").disabled = !data.workdir || Boolean(data.read_only);
+    $("to-evid").classList.toggle("pending", ho.pending > 0);
+    $("to-evid-state").textContent = ho.set
+      ? `${ho.set} · ${ho.pending ? ho.pending + " to hand off" : "up to date"}`
+      : "";
+    if (window.parent !== window && ho.pending !== state.badge) {
+      state.badge = ho.pending;  // the workbench shows it on the Anonymization tab
+      window.parent.postMessage({ type: "workbench-badge", count: ho.pending }, "*");
+    }
     $("keys").textContent = (data.keys && data.keys.label) || "";
     $("keys").title = (data.keys && data.keys.path) || "";
     $("keys-folder").disabled = !(data.keys && data.keys.folder);
@@ -207,7 +237,7 @@ if (typeof document !== "undefined") {
   function renderTree(data) {
     const root = $("tree");
     root.textContent = "";
-    for (const project of data.projects || []) {
+    for (const project of (data.projects || []).filter((p) => !EMBED || p.active)) {
       const block = document.createElement("div");
       block.className = "project" + (project.active ? " active" : "");
       const head = document.createElement("div");
@@ -1072,6 +1102,8 @@ if (typeof document !== "undefined") {
   }
 
   function darkMode() {
+    const forced = document.documentElement.dataset.theme;
+    if (forced) return forced === "dark";
     return matchMedia("(prefers-color-scheme: dark)").matches;
   }
 
@@ -1536,8 +1568,32 @@ if (typeof document !== "undefined") {
   setInterval(() => {
     if (state.data && state.data.busy) refresh().catch(() => {});
   }, 400);
+  $("to-evid").onclick = async () => {
+    const ho = (state.data && state.data.handoff) || {};
+    let set = ho.set || "";
+    if (!set) {
+      set = (window.prompt("Hand off to which evid set? (the case's anon set, e.g. 2026-014-anon)", "") || "").trim();
+      if (!set) return;
+    }
+    try {
+      await api("/api/handoff", { set });
+    } catch (error) {
+      $("status").textContent = error.message;
+    }
+    refresh();
+  };
   termBoot();
-  refresh().catch((error) => {
+  (async () => {
+    const project = params.get("project");
+    if (project) {
+      await api("/api/project/ensure", {
+        path: project,
+        name: params.get("name") || "",
+        evid_set: params.get("set") || "",
+      });
+    }
+    await refresh();
+  })().catch((error) => {
     $("status").textContent = error.message;
   });
 }

@@ -373,6 +373,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/project/open":
             session.open_project(str(body.get("path") or ""))
             return {"ok": True}
+        if (
+            path == "/api/project/ensure"
+        ):  # the workbench: this case's project, created if empty
+            session.ensure_project(
+                str(body.get("path") or ""),
+                str(body.get("name") or ""),
+                str(body.get("evid_set") or ""),
+            )
+            return {"ok": True}
+        if path == "/api/handoff":
+            return session.handoff(str(body.get("set") or ""))
         if path == "/api/project/rename":
             session.rename_project(str(body.get("name") or ""))
             return {"ok": True}
