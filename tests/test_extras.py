@@ -1,24 +1,19 @@
-"""Optional extras: gui (PySide6). Models extra already exists."""
+"""The gui extra is empty: the page server is in the base install."""
 
 from __future__ import annotations
 
-import pytest
 
-
-def test_require_gui_names_the_extra_when_missing(monkeypatch):
+def test_gui_is_always_available():
     from did import extras
 
-    monkeypatch.setattr(extras, "has_gui", lambda: False)
-    with pytest.raises(ImportError, match=r"did\[gui\]"):
-        extras.require_gui()
+    assert extras.has_gui() is True
+    extras.require_gui()
 
 
-def test_gui_callback_exits_with_extra_hint(monkeypatch, capsys):
-    from did import extras
-    from did.cli.gui import gui
+def test_gui_callback_serves_without_a_qt_check(monkeypatch):
+    from did.cli import gui as gui_mod
 
-    monkeypatch.setattr(extras, "has_gui", lambda: False)
-    with pytest.raises(SystemExit) as ei:
-        gui()
-    assert ei.value.code == 1
-    assert "did[gui]" in capsys.readouterr().out
+    seen = {}
+    monkeypatch.setattr(gui_mod, "serve_gui", lambda **kwargs: seen.update(kwargs))
+    gui_mod.gui(port=8800, browser=True, headless=False)
+    assert seen == {"port": 8800, "browser": True, "headless": False, "agent": None}

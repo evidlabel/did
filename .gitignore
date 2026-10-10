@@ -26,6 +26,9 @@ out/
 *.tsbuildinfo
 next-env.d.ts
 
+# Tauri build output
+app/target/
+
 # local-dev (this clone; not published)
 # Makefile: make docs / test / sync / fmt
 # docs/: Fumadocs MDX

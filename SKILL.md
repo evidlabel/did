@@ -25,7 +25,7 @@ Discover flags from the installed CLI: `did -h`, `did <path> -h`, `did -j`. Afte
 1. **Run locally:** `did batch <in> -o <out>`.
 2. **Review `<out>/anon/`** for leftover names and re-identifying context. Over-removal wins.
    - Local model available → it reviews, and gates what goes on to ingestion.
-   - No model → a human reviews in `did gui` (extra `did[gui]`).
+   - No model → a human reviews in `did gui` (the did-app window, or the browser).
    - Neither → still continue, but record the output as **unreviewed**: run `evid --db evid tag assign <uuid> unreviewed` for each source document already in the case set, and say so in the report. evid stores that tag as `<slug>.unreviewed`. `<out>/anon/` is Typst, not an evid document, so the handoff itself has no uuid to tag.
 3. **Hand off only `<out>/anon/`.** It is token-only Typst (`D1.typ`, or `combined.typ` when documents are combined) plus `manifest.json`. The tokens are raw `#(P1V1)` markup, and the directory is not PDFs. `evid --db evid doc add` accepts PDFs, a directory of PDFs, or a URL, so it does not ingest `anon/`. A remote model gets `<out>/anon/` and nothing else. Nothing in did or evid turns that Typst into a case PDF. Name that gap and stop rather than passing `anon/` to `doc add`.
 4. **Keep `<out>/keys/` out of Git.** Add it to `.gitignore` before the first commit.
@@ -48,7 +48,7 @@ The handoff is `anon/` (or the GUI Markdown/JSON/ZIP export). `keys/` and the GU
 uv tool install 'did[models] @ git+https://github.com/evidlabel/did.git'
 ```
 
-`did[gui]` for human review, or `did[all]`.
+`did gui` for human review. The preview shows source text with an UNANON marker until detection replaces it; that view is not the handoff. The agent pane on the right defaults to `ocprofile launch local-qw38` in the project folder (a local model; the saved OpenCode profile stays as it is). Do not paste source text into that terminal. Selection sends the pseudonymized preview only, and refuses the UNANON view. Check pseudonymization → sends the keyword YAML (`draft/entities.yaml`) to that local agent to look for non-PII to remove and entries to combine. The agent replies in the terminal and does not rewrite the keys file. That YAML is not a remote handoff: `keys/` stays on the device. `did[gui]` is an empty extra; `did[all]` adds every language model.
 
 ## Limits
 

@@ -597,6 +597,59 @@ def loaded_anonymizer(anonymizer, yaml_text):
     return loaded
 
 
+def settle_detection(
+    anonymizer,
+    yaml_str,
+    anonymized,
+    report,
+    review,
+    readings,
+    texts,
+    not_names,
+    force,
+):
+    """Pick the keys a detection pass keeps, then pseudonymize with them.
+
+    Pure: no session and no disk. The caller publishes the result. Re-running
+    the regex pass here is what makes a saved review win over the fresh guess.
+    """
+    yaml_str = drop_fragment_organizations(yaml_str)
+    yaml_str = stamp_reading(yaml_str, readings_digest(readings))
+    effective = yaml_str
+    origin = "fresh"
+    status = f"Fresh detection · {count_identities(yaml_str)} identities."
+    if not force and review_matches_readings(review, readings):
+        effective = drop_fragment_organizations(review)
+        origin = "saved_review"
+        status = "Applied the saved review (documents unchanged)."
+    elif count_identities(review):
+        try:
+            effective, kept, added = merge_review(review, yaml_str)
+        except ValueError:
+            status = (
+                "The previous review was not valid YAML, so entities were "
+                "detected afresh."
+            )
+        else:
+            origin = "merged"
+            status = f"Merged review: kept {kept} reviewed, added {added} new."
+    if not_names:
+        effective = exclude_not_names(effective, not_names)
+    if effective != yaml_str:
+        anonymized = pseudonymize_all(anonymizer, effective, texts)
+        report = verify_outputs(effective, anonymized, not_names)
+    message = f"{status} {len(list(readings))} document(s)."
+    if report is not None and not report.is_clean:
+        message = f"{message}  {report.summary()}"
+    return {
+        "yaml": effective,
+        "anonymized": anonymized,
+        "report": report,
+        "origin": origin,
+        "status": message,
+    }
+
+
 def verify_outputs(yaml_text, anonymized, not_names=(), *, anonymizer=None):
     """Re-scan pseudonymized output for identifiers that survived replacement.
 

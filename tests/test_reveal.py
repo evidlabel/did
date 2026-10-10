@@ -1,6 +1,6 @@
 """File-manager reveal: prefer a real browser over a hijacked MIME default."""
 
-from gdid.gui.reveal import file_manager_command, open_in_file_manager
+from gdid.reveal import file_manager_command, open_in_file_manager
 
 
 def _which(*installed):
