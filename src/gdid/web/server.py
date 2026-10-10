@@ -92,6 +92,46 @@ def terminal_env(url: str) -> dict:
     return env
 
 
+AGENT_KEEP = (
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "UV_TOOL_DIR",
+    "UV_PYTHON_INSTALL_DIR",
+    "FNM_DIR",
+)
+
+
+def agent_home(workdir: Path) -> dict:
+    """The agent pane's own XDG data and state, inside the project folder.
+
+    opencode (the default agent) keeps its sessions (``opencode.db``, ``storage/``) under
+    XDG data and its prompt history under XDG state. Pointing both into the project's
+    ``.agent/`` keeps the case's raw text out of the shared ``~/.local/share/opencode``,
+    which other terminals (the workbench's writing agents) can read. Your opencode login
+    and tools are linked in; uv and fnm stay where they are."""
+    home = Path.home()
+    shared_data = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
+    base = Path(workdir) / ".agent"
+    data, state = base / "data", base / "state"
+    (data / "opencode").mkdir(parents=True, exist_ok=True)
+    (state / "opencode").mkdir(parents=True, exist_ok=True)
+    base.chmod(0o700)
+    for name in ("auth.json", "bin"):
+        src, dst = shared_data / "opencode" / name, data / "opencode" / name
+        if src.exists() and not dst.exists() and not dst.is_symlink():
+            dst.symlink_to(src)
+    env = {"XDG_DATA_HOME": str(data), "XDG_STATE_HOME": str(state)}
+    pins = {
+        "UV_TOOL_DIR": shared_data / "uv" / "tools",
+        "UV_PYTHON_INSTALL_DIR": shared_data / "uv" / "python",
+        "FNM_DIR": shared_data / "fnm",
+    }
+    for key, path in pins.items():
+        if key not in os.environ and path.exists():
+            env[key] = str(path)
+    return env
+
+
 def external_name() -> str:
     if shutil.which("ptyxis"):
         return "ptyxis"
@@ -106,7 +146,7 @@ def external_terminal(cwd: Path, env: dict, agent: str) -> str:
     keep = [
         f"{key}={value}"
         for key, value in env.items()
-        if key.startswith("DID_") and key != "DID_IN_APP"
+        if (key.startswith("DID_") and key != "DID_IN_APP") or key in AGENT_KEEP
     ]
     inner = [shell, "-ic", f"{agent}; exec {shell}"] if agent else [shell, "-i"]
     run = ["env", *keep, *inner]
@@ -139,7 +179,8 @@ class ProjectAgents:
         key = str(Path(workdir).resolve())
         with self.lock:
             if key not in self.by_dir and create:
-                self.by_dir[key] = Sessions(key, terminal_env(self.url))
+                env = {**terminal_env(self.url), **agent_home(Path(key))}
+                self.by_dir[key] = Sessions(key, env)
             return self.by_dir.get(key)
 
     def stop(self) -> None:
@@ -568,7 +609,8 @@ class Handler(BaseHTTPRequestHandler):
     def _term_external(self) -> dict:
         self._require_agents()
         workdir = self._open_workdir()
-        cmd = external_terminal(workdir, terminal_env(Handler.url), Handler.agent)
+        env = {**terminal_env(Handler.url), **agent_home(workdir)}
+        cmd = external_terminal(workdir, env, Handler.agent)
         return {"ok": True, "cmd": cmd}
 
     def _upgrade_terminal(self, query: dict) -> None:

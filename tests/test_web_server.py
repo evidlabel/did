@@ -1010,3 +1010,27 @@ def test_handoff_needs_a_set(client, tmp_path):
     _add(client, tmp_path / "a.txt", "Ole Hansen kept the deposit.")
     status, payload = client.post("/api/handoff", {})
     assert status == 400 and "Which evid set" in payload["error"]
+
+
+def test_agent_pane_keeps_its_own_opencode_data(tmp_path, monkeypatch):
+    """did's agent sees raw text: its opencode sessions and prompt history stay in the project."""
+    from gdid.web.server import agent_home
+
+    shared = tmp_path / "share"
+    (shared / "opencode" / "bin").mkdir(parents=True)
+    (shared / "opencode" / "auth.json").write_text("{}")
+    (shared / "uv" / "tools").mkdir(parents=True)
+    monkeypatch.setenv("XDG_DATA_HOME", str(shared))
+    monkeypatch.delenv("UV_TOOL_DIR", raising=False)
+    work = tmp_path / "did" / "2026-014"
+    work.mkdir(parents=True)
+    env = agent_home(work)
+    assert env["XDG_DATA_HOME"] == str(work / ".agent" / "data")
+    assert env["XDG_STATE_HOME"] == str(work / ".agent" / "state")
+    assert (
+        work / ".agent" / "data" / "opencode" / "auth.json"
+    ).resolve() == shared / "opencode" / "auth.json"
+    assert (work / ".agent" / "data" / "opencode" / "bin").is_symlink()
+    assert env["UV_TOOL_DIR"] == str(shared / "uv" / "tools") and "FNM_DIR" not in env
+    assert oct((work / ".agent").stat().st_mode & 0o777) == "0o700"
+    assert agent_home(work) == env  # again: same, no error
