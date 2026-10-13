@@ -1,6 +1,6 @@
 [project]
 name = "did"
-version = "0.3.0"
+version = "0.3.1"
 description = "Local-first CLI and GUI for reviewing and pseudonymizing documents"
 authors = [
     { name = "evidlabel", email = "210122431+evidlabel@users.noreply.github.com" },
@@ -64,11 +64,9 @@ did = "did.cli:main"
 
 [dependency-groups]
 dev = [
-    "mkdocs",
     "pre-commit",
     "pytest>=8.4.0,<9",
     "pytest-cov>=5.0",
-    "pytest-rich",
     "ruff>=0.6.0",
 ]
 

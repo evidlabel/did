@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import subprocess
 import threading
 import time
 import urllib.error
@@ -22,14 +23,18 @@ from gdid.web.server import (
     ProjectAgents,
     Server,
     ask_raise,
+    directory_dialog_command,
     external_terminal,
+    file_dialog_command,
     lock_path,
+    pick_directory,
+    pick_paths,
     resolve_agent,
     running_instance,
     serve_gui,
     terminal_env,
 )
-from gdid.web.session import Session
+from gdid.web.session import ApiError, Session
 from gdid.web.settings import GuiSettings
 from gdid.web.term import agent_name
 
@@ -41,18 +46,23 @@ class Scripted:
     leak = False
     gate = None
 
+    batches: list[int] = []
+
     def __init__(self, language="da", detection_profile=None):
-        Scripted.seen.append((language, detection_profile))
         self.language = language
+        self.detection_profile = detection_profile
         self.texts: list[str] = []
+
+    def detect_entities(self, texts):
+        # Construction is not a scan. Only this call is Presidio.
+        Scripted.seen.append((self.language, self.detection_profile))
+        Scripted.batches.append(len(list(texts)))
+        self.texts = list(texts)
         gate = Scripted.gate
         if gate is not None and not gate["used"]:
             gate["used"] = True
             gate["started"].set()
             assert gate["release"].wait(5)
-
-    def detect_entities(self, texts):
-        self.texts = list(texts)
 
     def generate_yaml(self):
         blob = "\n".join(self.texts)
@@ -149,6 +159,7 @@ class Client:
 @pytest.fixture
 def client(monkeypatch):
     Scripted.seen = []
+    Scripted.batches = []
     Scripted.leak = False
     Scripted.gate = None
     _write_outputs.fake = True
@@ -184,8 +195,12 @@ def _new(client: Client, parent: Path, name="Case", language=None):
 
 
 def _add(client: Client, path: Path, text: str):
+    """Add a document and scan it. Adding alone does not run Presidio."""
     path.write_text(text, encoding="utf-8")
     status, payload = client.post("/api/documents/add", {"paths": [str(path)]})
+    assert status == 200, payload
+    client.wait()
+    status, payload = client.post("/api/detect")
     assert status == 200, payload
     return client.wait()
 
@@ -299,6 +314,10 @@ def test_stale_detection_does_not_clobber_the_open_project(client, tmp_path):
     letter.write_text("John Doe was here.", encoding="utf-8")
     status, payload = client.post("/api/documents/add", {"paths": [str(letter)]})
     assert status == 200, payload
+    assert client.wait()["preview"]["state"] == "UNANON"
+    assert not Scripted.gate["started"].is_set()
+    status, payload = client.post("/api/detect")
+    assert status == 200, payload
     assert Scripted.gate["started"].wait(5)
     _new(client, tmp_path / "second", name="Second")
     Scripted.gate["release"].set()
@@ -385,15 +404,15 @@ def test_formats_change_the_preview_and_the_handoff_stays_tokenized(client, tmp_
     _add(client, tmp_path / "secret-letter-name.txt", "John Doe met Jane Roe.")
     status, payload = client.post("/api/preview", {"format": "plain"})
     assert status == 200, payload
-    plain = client.get("/api/state")["preview"]["text"]
+    plain = client.wait()["preview"]["text"]
     assert "[PERSON 1]" in plain
     assert "#(P1V1)" not in plain
     status, payload = client.post("/api/preview", {"format": "redacted"})
     assert status == 200, payload
-    assert "[REDACTED]" in client.get("/api/state")["preview"]["text"]
+    assert "[REDACTED]" in client.wait()["preview"]["text"]
     status, payload = client.post("/api/preview", {"format": "synthetic"})
     assert status == 200, payload
-    synthetic = client.get("/api/state")["preview"]["text"]
+    synthetic = client.wait()["preview"]["text"]
     assert "John Doe" not in synthetic
     status, payload = client.post("/api/preview", {"format": "typst"})
     assert status == 200, payload
@@ -403,6 +422,60 @@ def test_formats_change_the_preview_and_the_handoff_stays_tokenized(client, tmp_
     assert "#(DOC1V1)" in handoff["text"]
     assert "secret-letter-name" not in handoff["text"]
     assert "John Doe" not in handoff["text"]
+
+
+def test_output_label_and_select_keep_the_documents(client, tmp_path):
+    _new(client, tmp_path / "cases")
+    state = _add(client, tmp_path / "letter.txt", "John Doe met Jane Roe.")
+    active = next(node for node in state["projects"] if node["active"])
+    docs = [doc["name"] for doc in active["documents"]]
+    assert docs == ["letter.txt"]
+    output = active["output"]
+    chosen = next(item for item in output["files"] if item["label"] == "letter")
+    status, payload = client.post(
+        "/api/documents/select",
+        {"path": chosen["path"], "version": output["path"]},
+    )
+    assert status == 200, payload
+    state = client.get("/api/state")
+    active = next(node for node in state["projects"] if node["active"])
+    assert [doc["name"] for doc in active["documents"]] == docs
+    assert state["read_only"] is True
+    assert any(item["selected"] for item in active["output"]["files"])
+    status, payload = client.post(
+        "/api/documents/select", {"path": active["documents"][0]["path"]}
+    )
+    assert status == 200, payload
+    state = client.get("/api/state")
+    assert state["read_only"] is False
+    assert state["preview"]["name"] == "letter.txt"
+
+
+def test_synthetic_preview_renders_off_the_request(client, monkeypatch, tmp_path):
+    """Changing review text must not run Faker on the thread that serves the click."""
+    _new(client, tmp_path / "cases")
+    _add(client, tmp_path / "letter.txt", "John Doe met Jane Roe.")
+    release = threading.Event()
+    names = []
+    real = pipeline.to_synthetic
+
+    def blocked(text, yaml_text, language="en", seed="did"):
+        names.append(threading.current_thread().name)
+        assert release.wait(5)
+        return real(text, yaml_text, language, seed)
+
+    monkeypatch.setattr(pipeline, "to_synthetic", blocked)
+    status, payload = client.post("/api/preview", {"format": "synthetic"})
+    assert status == 200, payload
+    state = client.get("/api/state", timeout=2)
+    assert state["busy"]
+    assert "#(P1V1)" in state["preview"]["text"]
+    release.set()
+    done = client.wait()
+    assert names
+    assert set(names) == {"did-gui-preview"}
+    assert "John Doe" not in done["preview"]["text"]
+    assert "#(P1V1)" not in done["preview"]["text"]
 
 
 def test_verification_gates_save_and_an_edit_drops_the_ack(client, tmp_path):
@@ -568,6 +641,101 @@ def test_filesystem_listing_skips_dotfiles(client, tmp_path):
     assert [entry["name"] for entry in listing["entries"]] == ["visible.txt"]
 
 
+def test_directory_dialog_is_the_desktop_folder_picker(tmp_path):
+    nested = tmp_path / "cases"
+    nested.mkdir()
+    command = directory_dialog_command(str(nested / "missing"))
+    assert command[:3] == ["zenity", "--file-selection", "--directory"]
+    assert "--title=Choose a folder" in command
+    filename = next(part for part in command if part.startswith("--filename="))
+    assert filename == f"--filename={nested}{os.sep}"
+
+    chosen = nested / "fresh"
+    chosen.mkdir()
+    seen = {}
+
+    def run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout=str(chosen) + "\n", stderr="")
+
+    assert pick_directory(str(nested), run=run) == str(chosen)
+    assert seen["cmd"][2] == "--directory"
+
+    def cancel(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+
+    assert pick_directory(str(nested), run=cancel) is None
+
+    note = tmp_path / "note.txt"
+    note.write_text("x", encoding="utf-8")
+
+    def a_file(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=str(note) + "\n", stderr="")
+
+    with pytest.raises(ApiError):
+        pick_directory(str(nested), run=a_file)
+
+
+def test_directory_endpoint_returns_the_chosen_folder(client, monkeypatch, tmp_path):
+    monkeypatch.setattr("gdid.web.server.pick_directory", lambda path: str(tmp_path))
+    status, payload = client.post("/api/fs/directory", {"path": str(tmp_path)})
+    assert status == 200, payload
+    assert payload["path"] == str(tmp_path)
+
+
+def test_file_dialogs_use_the_same_picker(tmp_path):
+    letter = tmp_path / "letter.txt"
+    other = tmp_path / "other.txt"
+    letter.write_text("a", encoding="utf-8")
+    other.write_text("b", encoding="utf-8")
+    command = file_dialog_command("files", str(tmp_path))
+    assert command[:2] == ["zenity", "--file-selection"]
+    assert "--multiple" in command
+    assert "--directory" not in command
+    assert "--title=Add documents" in command
+    sep = next(part for part in command if part.startswith("--separator="))
+    sep = sep.removeprefix("--separator=")
+
+    def run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=f"{letter}{sep}{other}\n", stderr=""
+        )
+
+    assert pick_paths("files", str(tmp_path), run=run) == [str(letter), str(other)]
+
+    project = tmp_path / "project.did-project.yaml"
+    project.write_text("name: Case\n", encoding="utf-8")
+    command = file_dialog_command("project", str(tmp_path))
+    assert command[:2] == ["zenity", "--file-selection"]
+    assert "--file-filter=DID project | *.yaml *.yml" in command
+    assert "--title=Open DID project" in command
+
+    def open_project(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=str(project) + "\n", stderr=""
+        )
+
+    assert pick_paths("project", str(tmp_path), run=open_project) == [str(project)]
+
+    def not_a_project(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=str(letter) + "\n", stderr="")
+
+    with pytest.raises(ApiError):
+        pick_paths("project", str(tmp_path), run=not_a_project)
+    with pytest.raises(ApiError):
+        file_dialog_command("nope", str(tmp_path))
+
+
+def test_pick_endpoint_returns_chosen_files(client, monkeypatch, tmp_path):
+    letter = tmp_path / "letter.txt"
+    monkeypatch.setattr("gdid.web.server.pick_paths", lambda kind, path: [str(letter)])
+    status, payload = client.post(
+        "/api/fs/pick", {"kind": "files", "path": str(tmp_path)}
+    )
+    assert status == 200, payload
+    assert payload["paths"] == [str(letter)]
+
+
 def test_document_mode_labels():
     session = Session(factory=Scripted)
     path = Path("letter.txt")
@@ -631,6 +799,56 @@ def test_rerun_detection_merges_the_review(client, tmp_path):
     assert state["keys"]["path"].endswith("/draft/entities.yaml")
 
 
+def test_annotation_queue_stays_in_the_draft(client, tmp_path):
+    _new(client, tmp_path / "cases")
+    status, payload = client.post(
+        "/api/annotations",
+        {"text": "  Jane   Roe ", "document": "letter.txt", "source": True},
+    )
+    assert status == 200, payload
+    assert payload["added"] is True
+    assert payload["annotations"][0]["text"] == "Jane Roe"
+    assert payload["annotations"][0]["source"] is True
+    state = client.get("/api/state")
+    assert state["annotations"][0]["text"] == "Jane Roe"
+    stored = Path(state["workdir"]) / "draft" / "annotations.json"
+    assert "Jane Roe" in stored.read_text(encoding="utf-8")
+    status, again = client.post(
+        "/api/annotations",
+        {"text": "jane roe", "document": "letter.txt", "source": True},
+    )
+    assert again["added"] is False
+    assert len(again["annotations"]) == 1
+    status, payload = client.post("/api/annotations", {"text": "x" * 401})
+    assert status == 400
+    status, payload = client.post(
+        "/api/annotations/remove", {"id": state["annotations"][0]["id"]}
+    )
+    assert status == 200, payload
+    assert payload["annotations"] == []
+    assert client.get("/api/state")["annotations"] == []
+
+
+def test_review_bundle_sends_tokens_not_source(client, tmp_path):
+    _new(client, tmp_path / "cases")
+    _add(client, tmp_path / "letter.txt", "John Doe met Jane Roe.")
+    status, payload = client.post("/api/review-bundle", {})
+    assert status == 200, payload
+    assert "John Doe" in payload["yaml"]
+    assert payload["withheld"] == 0
+    assert payload["documents"] == [
+        {
+            "name": "letter.txt",
+            "text": payload["documents"][0]["text"],
+        }
+    ]
+    body = payload["documents"][0]["text"]
+    assert "John Doe" not in body
+    assert "Jane Roe" not in body
+    assert "#(P1V1)" in body
+    assert "#(P2V1)" in body
+
+
 def test_keys_round_trip_and_version_is_read_only(client, tmp_path):
     _new(client, tmp_path / "cases")
     state = _add(client, tmp_path / "letter.txt", "John Doe met Jane Roe.")
@@ -688,6 +906,13 @@ def test_state_returns_while_detection_settles(client, monkeypatch, tmp_path):
     letter.write_text("John Doe met Jane Roe.", encoding="utf-8")
     status, payload = client.post("/api/documents/add", {"paths": [str(letter)]})
     assert status == 200, payload
+    state = client.wait()
+    assert not started.is_set()
+    assert state["preview"]["state"] == "UNANON"
+    assert state["preview"]["text"] == "John Doe met Jane Roe."
+    assert Scripted.seen == []
+    status, payload = client.post("/api/detect")
+    assert status == 200, payload
     assert started.wait(5)
     state = client.get("/api/state", timeout=1)
     assert state["busy"]
@@ -734,8 +959,73 @@ def test_reopen_uses_the_extract_and_detection_cache(client, tmp_path, monkeypat
     assert status == 200, payload
     state = client.wait()
     assert calls["n"] == 2
-    assert len(Scripted.seen) > seen
+    assert len(Scripted.seen) == seen
+    assert state["preview"]["state"] == "PSEUDONYMIZED"
     assert "#(P2V1)" in state["preview"]["text"]
+    assert "wrote back" in state["preview"]["text"]
+
+
+def test_showing_the_source_does_not_scan_the_set(client, tmp_path):
+    """Original, and opening the documents, must not run Presidio on the set."""
+    _new(client, tmp_path / "cases")
+    one = tmp_path / "one.txt"
+    two = tmp_path / "two.txt"
+    one.write_text("John Doe met Jane Roe.", encoding="utf-8")
+    two.write_text("Jane Roe wrote back.", encoding="utf-8")
+    status, payload = client.post("/api/documents/add", {"paths": [str(one), str(two)]})
+    assert status == 200, payload
+    state = client.wait()
+    assert state["preview"]["state"] == "UNANON"
+    assert "John Doe" in state["preview"]["text"]
+    assert state["scanned"] is False
+    assert state["keys"]["count"] == 0
+    assert state["keys"]["label"] == "Keys: none yet."
+    assert Scripted.seen == []
+    assert Scripted.batches == []
+    status, payload = client.post("/api/preview", {"original": True})
+    assert status == 200, payload
+    state = client.get("/api/state")
+    assert state["preview"]["original"] is True
+    assert state["preview"]["text"].startswith("John Doe")
+    assert Scripted.seen == []
+    status, payload = client.post("/api/project/open", {"path": state["active"]})
+    assert status == 200, payload
+    state = client.wait()
+    assert state["preview"]["state"] == "UNANON"
+    assert Scripted.seen == []
+    status, payload = client.post("/api/detect")
+    assert status == 200, payload
+    state = client.wait()
+    assert Scripted.batches == [2]
+    assert state["scanned"] is True
+    assert "#(P1V1)" in state["preview"]["text"]
+
+
+def test_original_stops_a_running_scan(client, tmp_path):
+    _new(client, tmp_path / "cases")
+    Scripted.gate = {
+        "used": False,
+        "started": threading.Event(),
+        "release": threading.Event(),
+    }
+    letter = tmp_path / "letter.txt"
+    letter.write_text("John Doe met Jane Roe.", encoding="utf-8")
+    status, payload = client.post("/api/documents/add", {"paths": [str(letter)]})
+    assert status == 200, payload
+    client.wait()
+    status, payload = client.post("/api/detect")
+    assert status == 200, payload
+    assert Scripted.gate["started"].wait(5)
+    status, payload = client.post("/api/preview", {"original": True})
+    assert status == 200, payload
+    Scripted.gate["release"].set()
+    state = client.wait()
+    assert state["error"] is None
+    assert state["preview"]["original"] is True
+    assert state["preview"]["text"] == "John Doe met Jane Roe."
+    assert state["preview"]["state"] == "RAW"
+    assert state["entities"] == []
+    assert state["scanned"] is False
 
 
 def test_state_returns_while_a_review_edit_rewrites(client, monkeypatch, tmp_path):

@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import atexit
 import multiprocessing as mp
+import queue
 import threading
+import time
 
 _DETECTION_TIMEOUT_S = 1800
 
@@ -23,6 +25,13 @@ _process = None
 _requests = None
 _responses = None
 _lock = threading.Lock()
+# Serializes jobs. cancel() does not take this, so a running wait can be stopped.
+_job_lock = threading.Lock()
+
+
+class DetectionCancelled(Exception):
+    """The child was stopped. The caller asked to see something else."""
+
 
 # Child-process cache: one Anonymizer (and its spaCy model) per language/profile.
 _anonymizers: dict = {}
@@ -55,6 +64,18 @@ def _echo_work(texts, language, detection_profile, not_names):
     if language == "boom":
         raise ValueError("nope")
     return f"{language}:{len(texts)}:{os.getpid()}", dict(texts), None
+
+
+def _sleep_work(texts, language, detection_profile, not_names):
+    """Child work that stays busy until the process is stopped. Tests only."""
+    import os
+
+    mark = os.environ.get("DID_SLEEP_MARK")
+    if mark:
+        with open(mark, "w", encoding="utf-8") as handle:
+            handle.write("in-job\n")
+    time.sleep(30)
+    return "slept", dict(texts), None
 
 
 def _child_main(request_queue, response_queue):
@@ -98,24 +119,63 @@ def ensure_started():
         return _process is not None
 
 
+def cancel():
+    """Stop the child so a scan does not keep the CPU after the user moves on.
+
+    The waiter notices the process is gone and raises :class:`DetectionCancelled`.
+    The next job starts a fresh child.
+    """
+    with _lock:
+        _discard_process()
+
+
+def _stopped(process) -> bool:
+    return process is not _process or not process.is_alive()
+
+
 def run_job(work, args, *, timeout=None):
     """Run ``work(*args)`` in the child and block the caller until it returns.
 
     The caller is a worker thread. The child has its own interpreter, so spaCy
     and text extraction there cannot hold this process's GIL or the GUI thread.
     The child must already be running (see :func:`ensure_started`).
+
+    The wait does not hold ``_lock``, so :func:`cancel` can stop the child
+    without waiting for the job to finish.
     """
     timeout = _DETECTION_TIMEOUT_S if timeout is None else timeout
-    with _lock:
-        if _process is None or not _process.is_alive():
-            raise RuntimeError("Detection process is not running.")
-        _requests.put((work, tuple(args)))
-        try:
-            kind, payload = _responses.get(timeout=timeout)
-        except Exception as exc:
-            # A dead or wedged child must not hang the worker forever.
-            _discard_process()
-            raise RuntimeError(f"Detection process failed: {exc}") from exc
+    with _job_lock:
+        with _lock:
+            if _process is None or not _process.is_alive():
+                raise RuntimeError("Detection process is not running.")
+            process = _process
+            responses = _responses
+            _requests.put((work, tuple(args)))
+        deadline = time.monotonic() + timeout
+        while True:
+            with _lock:
+                stopped = _stopped(process)
+            if stopped:
+                raise DetectionCancelled("Detection cancelled.")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                with _lock:
+                    if process is _process:
+                        _discard_process()
+                raise RuntimeError("Detection process failed: timed out")
+            try:
+                kind, payload = responses.get(timeout=min(0.25, remaining))
+            except queue.Empty:
+                continue
+            except Exception as exc:
+                with _lock:
+                    stopped = _stopped(process)
+                    if not stopped and process is _process:
+                        _discard_process()
+                if stopped:
+                    raise DetectionCancelled("Detection cancelled.") from exc
+                raise RuntimeError(f"Detection process failed: {exc}") from exc
+            break
     if kind == "error":
         raise RuntimeError(payload)
     return payload

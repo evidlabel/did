@@ -215,6 +215,108 @@ def list_dir(path: str | None) -> dict:
     return {"path": str(current), "parent": parent, "entries": entries}
 
 
+def existing_dir(path: str | None) -> Path:
+    raw = Path(path).expanduser() if path else Path.home()
+    try:
+        current = raw.resolve()
+    except OSError:
+        current = Path.home()
+    if current.is_dir():
+        return current
+    if current.parent.is_dir():
+        return current.parent
+    return Path.home()
+
+
+# Between paths from `zenity --multiple`. A newline is a legal filename character.
+_PICK_SEP = "\x1e"
+
+
+def file_dialog_command(kind: str, start: str | None) -> list[str]:
+    """zenity file dialog. ``directory`` can create a folder."""
+    folder = existing_dir(start)
+    filename = f"--filename={folder}{os.sep}"
+    if kind == "directory":
+        return [
+            "zenity",
+            "--file-selection",
+            "--directory",
+            "--title=Choose a folder",
+            filename,
+        ]
+    if kind == "files":
+        return [
+            "zenity",
+            "--file-selection",
+            "--multiple",
+            f"--separator={_PICK_SEP}",
+            "--title=Add documents",
+            filename,
+        ]
+    if kind == "project":
+        return [
+            "zenity",
+            "--file-selection",
+            "--file-filter=DID project | *.yaml *.yml",
+            "--title=Open DID project",
+            filename,
+        ]
+    raise ApiError(f"Unknown picker: {kind}")
+
+
+def directory_dialog_command(start: str | None) -> list[str]:
+    return file_dialog_command("directory", start)
+
+
+def _dialog_paths(command: list[str], run=None) -> list[str] | None:
+    runner = run or subprocess.run
+    try:
+        completed = runner(command, capture_output=True, text=True, check=False)
+    except FileNotFoundError as exc:
+        raise ApiError("The file picker is not available (zenity).") from exc
+    if completed.returncode == 1:
+        return None
+    if completed.returncode != 0:
+        detail = (completed.stderr or "").strip() or f"exit {completed.returncode}"
+        raise ApiError(f"The file picker failed: {detail}")
+    text = completed.stdout or ""
+    if text.endswith("\n"):
+        text = text[:-1]
+    if not text:
+        return None
+    return [part for part in text.split(_PICK_SEP) if part]
+
+
+def pick_paths(kind: str, start: str | None, run=None) -> list[str] | None:
+    """Open a desktop file dialog. None when the user cancels.
+
+    ``run`` replaces ``subprocess.run`` in tests.
+    """
+    chosen = _dialog_paths(file_dialog_command(kind, start), run)
+    if not chosen:
+        return None
+    paths = []
+    for item in chosen:
+        path = Path(item)
+        if kind == "directory":
+            if not path.is_dir():
+                raise ApiError("Choose a folder that exists.")
+        elif kind == "project":
+            if path.suffix.lower() not in {".yaml", ".yml"} or not path.is_file():
+                raise ApiError("Choose a DID project file (.yaml).")
+        elif not path.is_file():
+            raise ApiError("Choose a document that exists.")
+        paths.append(str(path))
+    return paths or None
+
+
+def pick_directory(start: str | None, run=None) -> str | None:
+    paths = pick_paths("directory", start, run=run)
+    if not paths:
+        return None
+    return paths[0]
+
+
 def _runtime_dir() -> Path:
     base = os.environ.get("XDG_RUNTIME_DIR") or os.environ.get("TMPDIR") or "/tmp"
     path = Path(base) / "did"
@@ -404,6 +506,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def _dispatch(self, path: str, body: dict):
         session = self.app.session
+        if path == "/api/fs/directory":
+            return {"path": pick_directory(str(body.get("path") or ""))}
+        if path == "/api/fs/pick":
+            return {
+                "paths": pick_paths(
+                    str(body.get("kind") or ""), str(body.get("path") or "")
+                )
+            }
         if path == "/api/project/new":
             session.new_project(
                 str(body.get("name") or ""),
@@ -475,6 +585,16 @@ class Handler(BaseHTTPRequestHandler):
                 session.replace_keys(str(body.get("yaml") or ""))
                 return {"ok": True}
             return session.keys_document()
+        if path == "/api/review-bundle":
+            return session.review_bundle()
+        if path == "/api/annotations":
+            return session.add_annotation(
+                str(body.get("text") or ""),
+                str(body.get("document") or ""),
+                bool(body.get("source")),
+            )
+        if path == "/api/annotations/remove":
+            return session.drop_annotation(str(body.get("id") or ""))
         if path == "/api/entities/type":
             session.change_types(body.get("ids") or [], str(body.get("type") or ""))
             return {"ok": True}

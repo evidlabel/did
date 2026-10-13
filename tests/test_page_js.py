@@ -54,7 +54,7 @@ def test_keyword_review_ships_the_yaml():
         pytest.skip("node is not installed")
     script = r"""
 const assert = require("assert");
-const { keywordReview, agentSubmit } = require("./src/gdid/web/page.js");
+const { keywordReview, fullCheck, agentSubmit } = require("./src/gdid/web/page.js");
 assert.strictEqual(keywordReview(""), null);
 assert.strictEqual(keywordReview("  \n\t"), null);
 assert.strictEqual(keywordReview(null), null);
@@ -75,5 +75,81 @@ assert.ok(wrapped.paste.includes("Jane Roe"));
 assert.ok(wrapped.delay >= 200 && wrapped.delay <= 1500);
 assert.strictEqual(agentSubmit("end\u001b[201~then").paste, "\u001b[200~endthen\u001b[201~");
 assert.strictEqual(agentSubmit("x".repeat(200000)).delay, 1500);
+assert.strictEqual(fullCheck("", [], 0), null);
+assert.strictEqual(fullCheck("  \n", [{ text: "  \n" }], 0), null);
+assert.strictEqual(fullCheck(null, null, 0), null);
+const checked = fullCheck(yaml, [{ name: "note.pdf", text: "Hello #(P1V1)." }], 0);
+assert.ok(checked.includes(yaml.trim()));
+assert.ok(checked.includes("note.pdf"));
+assert.ok(checked.includes("Hello #(P1V1)."));
+assert.ok(/not PII/.test(checked));
+assert.ok(/variants list/.test(checked));
+assert.ok(/Leftovers:/.test(checked));
+assert.ok(/Do not edit draft\/entities\.yaml/.test(checked));
+assert.ok(checked.includes("```yaml\n"));
+assert.ok(checked.includes("```\nHello #(P1V1).\n```"));
+const yamlOnly = fullCheck("PERSON: []\n", [], 2);
+assert.ok(yamlOnly.includes("2 documents are still source text"));
+assert.ok(/Skip leftovers/.test(yamlOnly));
+const textOnly = fullCheck("", [{ name: "  ", text: "has ``` inside" }], 1);
+assert.ok(textOnly.includes("Keyword YAML: none yet."));
+assert.ok(textOnly.includes("1 document is still source text"));
+assert.ok(textOnly.startsWith("Full check"));
+assert.ok(textOnly.includes("````\nhas ``` inside\n````"));
+assert.ok(textOnly.includes("document\n"));
+"""
+    subprocess.run([node, "-e", script], cwd=ROOT, check=True)
+
+
+def test_annotation_queue_names_each_span():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    script = r"""
+const assert = require("assert");
+const { annotationQueue } = require("./src/gdid/web/page.js");
+assert.strictEqual(annotationQueue("PERSON: []\n", []), null);
+assert.strictEqual(annotationQueue("", [{ text: "  " }]), null);
+const prompt = annotationQueue("PERSON:\n- id: p1\n", [
+  { text: "Jane Roe", document: "letter.txt", source: true },
+  { text: "#(P1V1)", document: "note.pdf", source: false },
+]);
+assert.ok(prompt.includes("1. Jane Roe — letter.txt (source view)"));
+assert.ok(prompt.includes("2. #(P1V1) — note.pdf (pseudonymized view)"));
+assert.ok(/not PII/.test(prompt));
+assert.ok(/variants list/.test(prompt));
+assert.ok(/Name the type/.test(prompt));
+assert.ok(/original wording/.test(prompt));
+assert.ok(/Do not edit that file/.test(prompt));
+assert.ok(prompt.includes("```yaml\nPERSON:"));
+const bare = annotationQueue("", [{ text: "Acme" }]);
+assert.ok(bare.includes("1. Acme — (pseudonymized view)"));
+assert.ok(bare.includes("Keyword YAML: none yet."));
+"""
+    subprocess.run([node, "-e", script], cwd=ROOT, check=True)
+
+
+def test_preview_mode_maps_placeholder_fake_and_key():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    script = r"""
+const assert = require("assert");
+const { PREVIEW_MODES, previewModeId, previewModeBody } = require("./src/gdid/web/page.js");
+assert.deepStrictEqual(PREVIEW_MODES.map((item) => item.id), [
+  "placeholder", "tokens", "fake", "redacted", "key",
+]);
+assert.strictEqual(previewModeId("plain", false), "placeholder");
+assert.strictEqual(previewModeId("typst", false), "tokens");
+assert.strictEqual(previewModeId("synthetic", false), "fake");
+assert.strictEqual(previewModeId("redacted", false), "redacted");
+assert.strictEqual(previewModeId("synthetic", true), "key");
+assert.strictEqual(previewModeId("nope", false), "tokens");
+assert.deepStrictEqual(previewModeBody("placeholder"), { original: false, format: "plain" });
+assert.deepStrictEqual(previewModeBody("tokens"), { original: false, format: "typst" });
+assert.deepStrictEqual(previewModeBody("fake"), { original: false, format: "synthetic" });
+assert.deepStrictEqual(previewModeBody("redacted"), { original: false, format: "redacted" });
+assert.deepStrictEqual(previewModeBody("key"), { original: true });
+assert.deepStrictEqual(previewModeBody("nope"), { original: false, format: "typst" });
 """
     subprocess.run([node, "-e", script], cwd=ROOT, check=True)

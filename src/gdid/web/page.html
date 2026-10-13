@@ -81,16 +81,25 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 .project { margin-bottom: 8px; }
 .row { padding: 3px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
 .row:hover { background: var(--hover); }
-.row.sel, .project.active > .row { background: var(--sel); }
+.row.sel, .project.active > .row.head { background: var(--sel); }
 .row.child { padding-left: 18px; }
+.row.output-file { padding-left: 32px; cursor: pointer; }
+.row.group { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.row.group:hover { background: transparent; }
+.row.fold { cursor: pointer; color: var(--muted); }
 .row.missing { color: var(--err); }
 .row.muted, .row.link { color: var(--muted); }
 .mark { display: inline-block; width: 1.2em; }
-#main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-#toolbar, #findbar, #entity-tools { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--panel2); flex-wrap: wrap; }
-#check-pseudo { margin-left: auto; }
+#main { flex: 1 1 480px; min-width: 360px; display: flex; flex-direction: column; }
+#toolbar, #findbar, #entity-tools, #entity-actions { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--panel2); flex-wrap: wrap; }
 #preview-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-#preview-head { display: flex; gap: 8px; align-items: center; padding: 4px 8px; }
+#preview-head { display: flex; gap: 8px; align-items: center; padding: 4px 8px; flex-wrap: wrap; }
+#doc-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ask-agent, #find { margin-left: 0; flex: none; }
+#ask-agent { margin-left: auto; }
+label.mode { display: inline-flex; align-items: center; gap: 6px; flex: none; color: var(--muted); }
+label.mode select { color: var(--fg); }
+#handoff.pending { border-color: var(--warn); color: var(--warn); font-weight: 600; }
 #badge { font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 1px 6px; border-radius: 4px; background: var(--panel2); }
 #badge[data-state="RAW"],
 #badge[data-state="UNANON"] { background: #ffd8c2; color: #7a2500; }
@@ -104,29 +113,41 @@ button.tok { border: 0; background: transparent; padding: 0 1px; font-family: va
 .p-A { color: var(--p-A); } .p-PH { color: var(--p-PH); } .p-DT { color: var(--p-DT); }
 .p-ID { color: var(--p-ID); } .p-CD { color: var(--p-CD); } .p-GN { color: var(--p-GN); }
 .p-URL { color: var(--p-URL); } .p-DOC { color: var(--p-DOC); } .p-W { color: var(--p-W); }
-#entities-pane { width: 420px; flex: none; border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
+#entities-pane { width: 340px; min-width: 220px; flex: 0 1 340px; border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
 #entities { width: 100%; border-collapse: collapse; }
 #entities th, #entities td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
 #entities tr.sel { background: var(--sel); }
 #entities tr.hit { outline: 2px solid var(--accent); }
 #entities tr.child td { color: var(--muted); }
 #entity-scroll { flex: 1; overflow: auto; }
-#keys, #status { color: var(--muted); font-size: 12px; padding: 4px 8px; }
-#keys-folder { padding: 1px 8px; }
+#entity-empty { margin: 0; padding: 12px 12px 0; color: var(--muted); }
+#entity-tools.quiet { background: transparent; border-bottom: 0; padding: 8px 12px 12px; }
+#keys, #status, #entity-excluded { color: var(--muted); font-size: 12px; padding: 4px 8px; }
+#entity-excluded { padding: 0 12px 8px; }
 #status.err { color: var(--err); }
-#status-bar { display: flex; gap: 8px; border-top: 1px solid var(--line); align-items: center; }
-#status { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#status-bar { display: flex; gap: 8px; border-top: 1px solid var(--line); align-items: center; flex-wrap: wrap; }
+#keys { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#status { flex: 1 1 100%; white-space: normal; }
 .menu { position: fixed; z-index: 5; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px; display: flex; flex-direction: column; min-width: 180px; box-shadow: 0 8px 24px #0003; }
 .menu button { text-align: left; background: transparent; border-color: transparent; }
+#anno-queue { border-bottom: 1px solid var(--line); }
+#anno-head { display: flex; gap: 8px; align-items: center; padding: 6px 8px 2px; }
+#anno-head b { margin-right: auto; }
+#anno-list { list-style: none; margin: 0; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow: auto; }
+#anno-list li { font-family: var(--mono); font-size: 12px; padding: 3px 6px; background: var(--panel2); border-radius: 4px; }
+#anno-list .doc { color: var(--muted); }
+#settings-pop { min-width: 220px; padding: 10px; gap: 8px; }
+#settings-pop label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+#settings-pop label.row-check { flex-direction: row; align-items: center; gap: 8px; color: var(--fg); }
+#settings-pop label.row-check input { width: auto; }
+#settings-pop select, #settings-pop button { width: 100%; }
 #modal { position: fixed; inset: 0; background: #0006; display: flex; align-items: center; justify-content: center; }
 #modal-card { background: var(--panel); color: var(--fg); width: min(520px, 92vw); max-height: 80vh; overflow: auto; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
 #modal-body label { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
 #modal-body input, #modal-body textarea { width: 100%; }
-#fs { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow: auto; }
-#fs button.on { border-color: var(--accent); }
 .findings { white-space: pre-wrap; font-family: var(--mono); font-size: 12px; }
 #read-only { color: var(--warn); font-weight: 700; }
-#menubar #b-term { margin-left: auto; }
+#menubar #settings { margin-left: auto; }
 #b-term.on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 #divider2 { width: 5px; cursor: col-resize; flex: none; background: var(--line); }
 #divider2:hover { background: var(--accent); }
@@ -147,8 +168,8 @@ button.tok { border: 0; background: transparent; padding: 0 1px; font-family: va
 .tdot.ended { background: var(--warn); }
 .tbody { flex: 1; min-height: 0; padding: 4px 0 0 8px; }
 body.embed #side-actions { display: none; }  /* the workbench opens this case's project; no switching */
-#to-evid-state { font-size: 12px; }
-#to-evid.pending { border-color: var(--warn); color: var(--warn); font-weight: 600; }
+/* the Write tab owns the agent terminals: hide did's own pane when embedded */
+body.embed #b-term, body.embed #termpane, body.embed #divider2 { display: none !important; }
 </style>
 </head>
 <body>
@@ -166,45 +187,70 @@ body.embed #side-actions { display: none; }  /* the workbench opens this case's 
     <div id="menubar">
       <button id="menu-file" type="button">File</button>
       <button id="menu-help" type="button">Help</button>
+      <button id="settings" type="button" title="Language and detection.">Danish</button>
       <button id="b-term" type="button" title="Agent pane: a terminal in the open project's folder. The default command is a local OpenCode pairing.">Agent</button>
     </div>
     <div id="toolbar">
       <button id="add" type="button">Add documents</button>
-      <button id="redetect" type="button" title="Documents are processed automatically when added. Re-run detection after changing language or detection settings.">Re-run detection</button>
-      <label title="Language used to detect names, addresses, dates, and other entities.">Language <select id="lang"><option value="da">Danish</option><option value="en">English</option><option value="sv">Swedish</option></select></label>
-      <label title="Thorough prioritizes detection coverage; Balanced uses fewer resources.">Detection <select id="profile"><option value="thorough">Thorough</option><option value="balanced">Balanced</option></select></label>
-      <label title="Changes how reviewed identities appear in previews and LLM handoffs.">Preview <select id="format"><option value="typst">Typst #(P1V1)</option><option value="plain">Plain [PERSON 1]</option><option value="redacted">Redacted</option><option value="synthetic">Synthetic (Faker)</option></select></label>
-      <button id="original" type="button" title="Show the unanonymized source text of the current document. It contains personal data. LLM handoff still copies the pseudonymized text.">Original</button>
-      <button id="find" type="button">Find</button>
-      <span id="read-only" hidden>READ-ONLY</span>
-      <label title="Write the pseudonymized output for this project. It replaces the previous output.">Save <select id="save-mode"><option value="multi">Multi (separate files)</option><option value="single">Single (combined)</option><option value="pdf">PDFs (via Typst)</option></select></label>
-      <button id="save" type="button" class="primary" title="Write the pseudonymized output for this project. It replaces the previous output.">Save output</button>
-      <button id="handoff" type="button" title="Copy or package reviewed pseudonymized documents for an LLM session. Identity mappings are never included.">LLM handoff</button>
-      <button id="to-evid" type="button" title="Put the reviewed documents into the case's evid set as placeholder PDFs ([PERSON 1]); a later handoff replaces them in place.">Hand off to evid</button>
-      <span id="to-evid-state" class="muted"></span>
+      <button id="scan" type="button" class="primary" title="Look for names and other identifiers in every document. One person keeps one token across the set. The source stays on this machine.">Find identities</button>
+      <button id="save" type="button" class="primary" hidden title="Write the pseudonymized output for this project. It replaces the previous output.">Save output</button>
+      <button id="handoff" type="button" title="Copy, package, or send the reviewed text. Identity mappings are never included.">Hand off</button>
+      <span id="read-only" hidden>Read-only</span>
+    </div>
+    <div id="settings-pop" class="menu" hidden>
+      <label>Language
+        <select id="lang"><option value="da">Danish</option><option value="en">English</option><option value="sv">Swedish</option></select>
+      </label>
+      <label>Detection
+        <select id="profile" title="Thorough looks harder. Balanced is lighter."><option value="thorough">Thorough</option><option value="balanced">Balanced</option></select>
+      </label>
+      <label>Save as
+        <select id="save-mode"><option value="multi">Separate files</option><option value="single">One combined file</option><option value="pdf">PDFs</option></select>
+      </label>
+      <button id="scan-again" type="button" title="Look through every document again. The review you already edited is kept.">Scan again</button>
+      <button id="review-yaml" type="button" title="Advanced: edit the review YAML. The identity list is the normal view.">Review YAML…</button>
+      <label class="row-check" title="The local agent handles identity changes. Turn this on to change type, merge, add a variant, or keep a span as written.">
+        <input id="manual-edits" type="checkbox">
+        Edit identities
+      </label>
     </div>
     <div id="findbar" hidden>
-      <input id="find-q" type="text" placeholder="Find in document">
+      <input id="find-q" type="text" placeholder="Search this document">
       <button id="find-prev" type="button">Previous</button>
       <button id="find-next" type="button">Next</button>
     </div>
     <div id="preview-wrap">
-      <div id="preview-head"><span id="badge"></span><span id="doc-name"></span><span id="busy" hidden></span></div>
+      <div id="preview-head">
+        <label class="mode" title="How this document is written. Key is the real text and stays on this machine.">Mode
+          <select id="view-mode" aria-label="Preview mode">
+            <option value="placeholder" title="Labels such as [PERSON 1]. The first time, this scans every document.">Placeholder</option>
+            <option value="tokens" title="Typst tokens such as #(P1V1). The first time, this scans every document.">Tokens</option>
+            <option value="fake" title="Invented stand-ins. The first time, this scans every document.">Fake</option>
+            <option value="redacted" title="Each identifier becomes [REDACTED]. The first time, this scans every document.">Redacted</option>
+            <option value="key" title="The real values. Stays on this machine. Does not scan.">Key</option>
+          </select>
+        </label>
+        <span id="badge" hidden></span>
+        <span id="doc-name"></span>
+        <span id="busy" hidden></span>
+        <button id="find" type="button" title="Search this document">Search</button>
+        <button id="ask-agent" type="button" title="Send the keyword YAML and every pseudonymized document to the local agent. It lists trivial and non-PII entries to remove, variants of the same person or organisation to group, and leftovers still in the text. Original text is not sent.">Full check</button>
+      </div>
       <pre id="preview"></pre>
     </div>
-    <div id="status-bar"><div id="keys"></div><button id="keys-folder" type="button" title="Show the keys file’s folder in the file manager.">Open folder</button><div id="status"></div></div>
+    <div id="status-bar"><div id="keys"></div><div id="status"></div></div>
   </main>
   <aside id="entities-pane">
+    <p id="entity-empty">No identities yet. They show up here after Find identities. Right-click a selection and choose Annotate to queue a span for the local model.</p>
+    <p id="entity-excluded" hidden></p>
     <div id="entity-tools">
       <input id="entity-search" type="text" placeholder="Filter identities">
-      <select id="entity-type"><option value="">All types</option><option>PERSON</option><option>ORGANIZATION</option><option>LOCATION</option><option>EMAIL_ADDRESS</option><option>PHONE_NUMBER</option><option>DATE_NUMBER</option><option>ID_NUMBER</option><option>CODE_NUMBER</option><option>GENERAL_NUMBER</option><option>URL</option></select>
-      <select id="type-target"><option>PERSON</option><option>ORGANIZATION</option><option>LOCATION</option><option>EMAIL_ADDRESS</option><option>PHONE_NUMBER</option></select>
-      <button id="type-change" type="button">Change type</button>
-      <button id="add-variant" type="button">Add variant</button>
-      <button id="merge" type="button">Merge</button>
-      <button id="not-name" type="button">Do not pseudonymize</button>
-      <button id="from-selection" type="button">Create from selection</button>
-      <button id="check-pseudo" type="button" title="Send the keyword YAML to the agent on the right. It looks for non-PII to remove and entries to combine.">Check pseudonymization →</button>
+      <select id="entity-type" title="Show one kind of identity"><option value="">All types</option><option>PERSON</option><option>ORGANIZATION</option><option>LOCATION</option><option>EMAIL_ADDRESS</option><option>PHONE_NUMBER</option><option>DATE_NUMBER</option><option>ID_NUMBER</option><option>CODE_NUMBER</option><option>GENERAL_NUMBER</option><option>URL</option></select>
+      <button id="entity-edit" type="button" hidden title="Change type, merge, add a variant, or keep a span as written.">Edit</button>
+    </div>
+    <div id="anno-queue" hidden>
+      <div id="anno-head"><b id="anno-count">Queue</b><button id="anno-send" type="button" title="Send the queued spans and the keyword YAML to the local model. It says what to remove, which identity each span belongs on, and what is new. It does not edit the file.">Send to local model</button></div>
+      <ul id="anno-list"></ul>
     </div>
     <div id="entity-error"></div>
     <div id="entity-scroll">

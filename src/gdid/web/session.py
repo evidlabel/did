@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import json
+import secrets
 import shutil
 import threading
 import zipfile
@@ -187,13 +188,21 @@ class Session:
         self.anonymized: dict = {}
         self.anonymizer = None
         self.yaml_text = ""
+        self.annotations: list[dict] = []
         self.language = "da"
         self.detection_profile = "thorough"
         self.output_mode = "typst"
         self.show_original = False
         self.selected: Path | None = None
         self.viewing_version: Path | None = None
+        self.version_file: Path | None = None
         self.draft_view: dict | None = None
+        self._version_texts: dict = {}
+        self._version_inflight: str | None = None
+        self._render_cache: dict = {}
+        self._render_inflight = None
+        self._preview_seq = 0
+        self._node_cache: dict = {}
         self.verification = None
         self.verification_acknowledged = False
         self.keys_origin = None
@@ -203,7 +212,6 @@ class Session:
         self.temp_dirs: list[Path] = []
         self.auto_version = False
         self.force_merge = False
-        self._pending_redetect = False
         self._digest_cache: dict = {}
         self._sync_marks: dict[str, str] = {}
         self._draft_mark: str | None = None
@@ -231,9 +239,14 @@ class Session:
             self.error = None
 
         def target():
+            cancelled = False
             try:
                 result = work()
                 error = None
+            except detect_process.DetectionCancelled:
+                result = None
+                error = None
+                cancelled = True
             except SystemExit:
                 result = None
                 error = (
@@ -246,9 +259,12 @@ class Session:
             # Analysis already finished in work(), off this lock. apply() only
             # stores the result, so a state poll is not waiting on detection.
             with self.lock:
-                if generation != self.generation:
+                if cancelled or generation != self.generation:
                     if self.busy and self.busy.get("generation") == generation:
                         self.busy = None
+                    if cancelled and generation == self.generation:
+                        self.status = "Scan stopped."
+                        self.error = None
                     return
                 if error:
                     self.auto_version = False
@@ -431,11 +447,32 @@ class Session:
                 payload["cache"] = cache
 
     def _use_settled(self, readings, hit) -> None:
-        """Show a cached anonymized result. Caller holds the lock. No detection."""
+        """Show a cached anonymized result. Caller holds the lock. No detection.
+
+        Disk writes and export are not done here. Opening a project returns the
+        in-memory review. An import that asked for a version exports on a job.
+        """
         self.readings = dict(readings)
         self._digest_cache.update(hit.get("cache") or {})
         self._sync_marks = dict(hit.get("marks") or {})
-        self._publish_settled(hit["anonymizer"], hit["settled"])
+        exporting = self.auto_version
+        if exporting:
+            self.auto_version = False
+        self._publish_settled(hit["anonymizer"], hit["settled"], persist=False)
+        if not exporting:
+            return
+        mode = (
+            self.project.export_mode if self.project is not None else None
+        ) or "multi"
+
+        def apply(_result) -> None:
+            try:
+                self._export(mode, "document_import")
+            except (ApiError, ProjectError) as exc:
+                self.status = str(exc)
+                self.error = str(exc)
+
+        self._start_job("Saving output…", lambda: None, apply)
 
     def _read_documents(self, paths):
         """Read paths off the GUI thread and cache the readings.
@@ -549,8 +586,13 @@ class Session:
                 draft = "pending"
         return marks, draft, cache
 
-    def _publish_settled(self, anonymizer, settled) -> None:
-        """Store a finished analysis. Caller holds the lock. No detection here."""
+    def _publish_settled(self, anonymizer, settled, *, persist: bool = True) -> None:
+        """Store a finished analysis. Caller holds the lock. No detection here.
+
+        ``persist`` writes the draft and, when a document import asked for one,
+        the version. A settled-cache hit on open passes ``persist=False`` so
+        that request returns the in-memory review without saving or exporting.
+        """
         self.force_merge = False
         self.anonymizer = anonymizer
         self.yaml_text = settled["yaml"]
@@ -560,7 +602,7 @@ class Session:
         if self.project is not None:
             self.project.entity_config_yaml = settled["yaml"]
             self.project.source_paths = list(self.files)
-            if self.project.project_file is not None:
+            if persist and self.project.project_file is not None:
                 save_draft_entities(self.project, settled["yaml"])
                 save_project(self.project)
         self.status = settled["status"]
@@ -568,7 +610,7 @@ class Session:
             self.selected = self.files[0] if self.files else None
         self._draft_mark = self._draft_only()
         self._touch_preview()
-        if self.auto_version:
+        if persist and self.auto_version:
             self.auto_version = False
             try:
                 self._export(self.project.export_mode or "multi", "document_import")
@@ -636,12 +678,86 @@ class Session:
             "not_names": list(names),
         }
 
-    def _load_paths(self, paths, review: str) -> None:
-        """Show source text as soon as it is read, then anonymize it.
+    def _has_review(self, review: str = "") -> bool:
+        return bool(str(self.yaml_text or review or "").strip())
 
-        A full cache hit publishes the anonymized text on this thread (a dict
-        lookup). A miss reads in a worker, shows the source with an UNANON
-        marker, and detects after that. spaCy stays off this thread.
+    def _source_status(self) -> None:
+        """Caller holds the lock. The source is on screen and Presidio has not run."""
+        self.status = "Showing the source. Find identities scans every document."
+
+    def _keys_anonymizer(self):
+        """An anonymizer that can apply a saved review. No spaCy and no Presidio."""
+        if self.factory is Anonymizer:
+            return Anonymizer.for_regex_only(self.language, self.detection_profile)
+        return self.factory(
+            language=self.language, detection_profile=self.detection_profile
+        )
+
+    def _start_apply(self) -> None:
+        """Put the saved review on the texts. Regex only, so this is not a scan."""
+        with self.lock:
+            if not self.readings or not self._has_review():
+                self._source_status()
+                return
+            texts = self._texts()
+            yaml_text = self.yaml_text
+            language = self.language
+            profile = self.detection_profile
+            names = self._not_names()
+            anonymizer = self._keys_anonymizer()
+
+        def work():
+            anonymized, report = self._rewrite(
+                anonymizer, yaml_text, texts, names, language, profile
+            )
+            return anonymizer, anonymized, report
+
+        def apply(result):
+            anonymizer, anonymized, report = result
+            try:
+                anonymizer.load_replacements(pipeline.read_keys(yaml_text))
+            except (ValueError, AttributeError):
+                pass
+            self.anonymizer = anonymizer
+            self.anonymized = anonymized
+            self._set_verification(report)
+            self.status = (
+                "Saved review, without a new scan. "
+                "Find identities again if the documents changed."
+            )
+            if self.selected not in self.files:
+                self.selected = self.files[0] if self.files else None
+            self._touch_preview()
+
+        self._start_job("Applying the saved review…", work, apply)
+
+    def _after_readings(self, review: str) -> None:
+        """Cache hit, saved review, or the source. Never starts Presidio.
+
+        Caller holds the lock. A new job is started after the lock is released
+        by the caller when this returns ``"apply"``.
+        """
+        hit = self._settled_hit(
+            self.readings,
+            self.yaml_text or review,
+            self.language,
+            self.detection_profile,
+            self._not_names(),
+        )
+        if hit is not None:
+            self._use_settled(self.readings, hit)
+            return "cached"
+        if self._has_review(review):
+            return "apply"
+        self._source_status()
+        return "source"
+
+    def _load_paths(self, paths, review: str) -> None:
+        """Show source text as soon as it is read. Do not scan it.
+
+        A cache hit publishes the anonymized text on this thread. A saved
+        review is applied with the regex rewriter. Presidio runs only when
+        the user asks to find identities. spaCy stays off this thread.
         """
         paths = [Path(path) for path in paths]
         with self.lock:
@@ -666,20 +782,13 @@ class Session:
             self.verification_acknowledged = False
             self._touch_preview()
             if not missing:
-                hit = self._settled_hit(
-                    fresh,
-                    self.yaml_text or review,
-                    self.language,
-                    self.detection_profile,
-                    self._not_names(),
-                )
-                if hit is not None:
-                    self._use_settled(fresh, hit)
-                    return
-        if missing:
+                step = self._after_readings(review)
+            else:
+                step = "extract"
+        if step == "extract":
             self._start_extract(missing, review)
-            return
-        self._start_detect()
+        elif step == "apply":
+            self._start_apply()
 
     def _start_extract(self, missing, review: str) -> None:
         def work():
@@ -692,18 +801,9 @@ class Session:
             if any(path not in self.readings for path in self.files):
                 self.status = "Could not read every document."
                 return
-            hit = self._settled_hit(
-                self.readings,
-                self.yaml_text or review,
-                self.language,
-                self.detection_profile,
-                self._not_names(),
-            )
-            if hit is not None:
-                self._use_settled(self.readings, hit)
-                return
-            # The new job bumps generation, so this job does not clear its busy flag.
-            self._start_detect()
+            # A follow-up job bumps generation, so this job does not clear its flag.
+            if self._after_readings(review) == "apply":
+                self._start_apply()
 
         self._start_job("Reading documents…", work, apply)
 
@@ -756,7 +856,7 @@ class Session:
             self._remember_detection(result)
             self._publish_settled(result["anonymizer"], result["settled"])
 
-        self._start_job("Detecting entities…", work, apply)
+        self._start_job("Finding identities…", work, apply)
 
     # --------------------------------------------------------------- verify ---
     def _set_verification(self, report) -> None:
@@ -795,18 +895,153 @@ class Session:
             self.status = "Verification acknowledged for this output."
 
     # -------------------------------------------------------------- display ---
+    def _transform_text(
+        self, text: str, mode: str, yaml_text: str, language: str, seed: str
+    ) -> str:
+        """Render token text for a preview mode. Safe to call off the request thread."""
+        if mode == "plain":
+            return pipeline.to_written_out(text)
+        if mode == "redacted":
+            return pipeline.to_redacted(text)
+        if mode == "synthetic":
+            return pipeline.to_synthetic(text, yaml_text, language, seed)
+        return text
+
+    def _render_key(self, path, text: str):
+        return (str(path), self.output_mode, self._edit_epoch, len(text), hash(text))
+
     def _display_text(self, path) -> str | None:
+        """Transformed text for a handoff. Typst tokens are returned as stored.
+
+        The preview path does not use this. Plain, redacted, and synthetic
+        preview text is rendered on the preview worker.
+        """
         text = self.anonymized.get(path)
         if text is None:
             return None
-        if self.output_mode == "plain":
-            return pipeline.to_written_out(text)
-        if self.output_mode == "redacted":
-            return pipeline.to_redacted(text)
-        if self.output_mode == "synthetic":
-            seed = self.project.project_id if self.project is not None else "did"
-            return pipeline.to_synthetic(text, self.yaml_text, self.language, seed)
-        return text
+        seed = self.project.project_id if self.project is not None else "did"
+        return self._transform_text(
+            text, self.output_mode, self.yaml_text, self.language, seed
+        )
+
+    def _schedule_render(self, path, text: str, key) -> None:
+        """Render plain, redacted, or synthetic text off the request thread.
+
+        Caller holds the lock. A cache miss keeps the token text on screen and
+        sets the preview-busy flag the page already polls.
+        """
+        if key in self._render_cache or self._render_inflight == key:
+            return
+        self._render_inflight = key
+        mode = self.output_mode
+        yaml_text = self.yaml_text
+        language = self.language
+        seed = self.project.project_id if self.project is not None else "did"
+        self._preview_seq += 1
+        seq = self._preview_seq
+        self._preview_ready.clear()
+        self._preview_busy = {"message": "Updating the preview…", "seq": seq}
+        snapshot = text
+
+        def work() -> None:
+            try:
+                rendered = self._transform_text(
+                    snapshot, mode, yaml_text, language, seed
+                )
+                error = None
+            except Exception as exc:
+                rendered = snapshot
+                error = str(exc)
+            with self.lock:
+                self._render_cache[key] = rendered
+                if self._render_inflight == key:
+                    self._render_inflight = None
+                if (
+                    error
+                    and self._preview_busy
+                    and self._preview_busy.get("seq") == seq
+                ):
+                    self.status = "Error."
+                    self.error = error
+                if self._preview_busy and self._preview_busy.get("seq") == seq:
+                    self._preview_busy = None
+                    self._preview_ready.set()
+                self._touch_preview()
+
+        threading.Thread(target=work, name="did-gui-preview", daemon=True).start()
+
+    def _schedule_version_load(self, path: Path) -> None:
+        """Read one published file off the request thread. Caller holds the lock."""
+        key = str(path)
+        if path in self._version_texts or self._version_inflight == key:
+            return
+        self._version_inflight = key
+        mode = self.output_mode
+        yaml_text = self.yaml_text
+        language = self.language
+        seed = self.project.project_id if self.project is not None else "did"
+        epoch = self._edit_epoch
+        self._preview_seq += 1
+        seq = self._preview_seq
+        self._preview_ready.clear()
+        self._preview_busy = {"message": "Updating the preview…", "seq": seq}
+
+        def work() -> None:
+            try:
+                body = path.read_text(encoding="utf-8")
+                error = None
+            except UnicodeDecodeError:
+                body = ""
+                error = None
+            except OSError as exc:
+                body = ""
+                error = str(exc)
+            rendered = body
+            render_key = None
+            if body and mode != "typst" and error is None:
+                try:
+                    rendered = self._transform_text(
+                        body, mode, yaml_text, language, seed
+                    )
+                except Exception as exc:
+                    rendered = body
+                    error = str(exc)
+                render_key = (key, mode, epoch, len(body), hash(body))
+            with self.lock:
+                self._version_texts[path] = body
+                if render_key is not None:
+                    self._render_cache[render_key] = rendered
+                if self._version_inflight == key:
+                    self._version_inflight = None
+                if (
+                    error
+                    and self._preview_busy
+                    and self._preview_busy.get("seq") == seq
+                ):
+                    self.status = "Error."
+                    self.error = error
+                if self._preview_busy and self._preview_busy.get("seq") == seq:
+                    self._preview_busy = None
+                    self._preview_ready.set()
+                self._touch_preview()
+
+        threading.Thread(target=work, name="did-gui-preview", daemon=True).start()
+
+    def _preview_token(self, path: Path) -> str | None:
+        if self.viewing_version is not None and path == self.version_file:
+            return self._version_texts.get(path)
+        return self.anonymized.get(path)
+
+    def _shown_text(self, path: Path, token: str) -> str:
+        """Preview text. Typst is the stored tokens. Other modes use the worker cache."""
+        if self.output_mode == "typst":
+            return token
+        key = self._render_key(path, token)
+        cached = self._render_cache.get(key)
+        if cached is not None:
+            return cached
+        self._schedule_render(path, token, key)
+        return token
 
     def _version_sources(self, path: Path):
         state = self.draft_view or {}
@@ -845,8 +1080,15 @@ class Session:
         reading = self._loaded_reading(sources[0])
         return reading.text if reading is not None else None
 
+    def _preview_path(self) -> Path | None:
+        if self.viewing_version is not None and self.version_file is not None:
+            return self.version_file
+        if self.selected in self.files:
+            return self.selected
+        return None
+
     def _preview(self) -> dict:
-        path = self.selected if self.selected in self.files else None
+        path = self._preview_path()
         if path is None:
             return {
                 "text": "",
@@ -867,7 +1109,17 @@ class Session:
                 "original": True,
                 "can_original": True,
             }
-        rendered = self._display_text(path)
+        token = self._preview_token(path)
+        if token is None and self.viewing_version is not None:
+            self._schedule_version_load(path)
+            return {
+                "text": "",
+                "state": "VERSION",
+                "name": path.name,
+                "original": False,
+                "can_original": can_original,
+            }
+        rendered = self._shown_text(path, token) if token is not None else None
         if rendered is not None:
             if self.viewing_version is not None:
                 state = "VERSION"
@@ -912,6 +1164,15 @@ class Session:
             return "PSEUDO"
         return "PENDING"
 
+    @staticmethod
+    def _output_label(path: Path) -> str:
+        """Sidebar label for a published file: the source stem, not the Typst name."""
+        stem = Path(path).stem
+        for marker in ("_pseudonymized", "_pseudo"):
+            if stem.endswith(marker):
+                return stem[: -len(marker)] or Path(path).name
+        return stem or Path(path).name
+
     def _project_node(self, project: Project, *, active: bool) -> dict:
         versions = []
         try:
@@ -930,11 +1191,8 @@ class Session:
             sync = self._draft_mark
         else:
             sync = "pending"
-        anonymized = self.anonymized if active and self.viewing_version is None else {}
+        anonymized = self.anonymized if active else {}
         extracted = self.readings if active else {}
-        if active and self.viewing_version is not None and self.draft_view:
-            anonymized = self.draft_view.get("anonymized") or {}
-            extracted = self.draft_view.get("readings") or {}
         documents = []
         for source in project.source_paths:
             source = Path(source)
@@ -964,10 +1222,11 @@ class Session:
                     {
                         "path": str(output_path),
                         "name": output_path.name,
+                        "label": self._output_label(output_path),
                         "mode": mode,
                         "selected": active
                         and self.viewing_version == latest.path
-                        and output_path == self.selected,
+                        and output_path == self.version_file,
                     }
                 )
             output = {
@@ -1022,7 +1281,7 @@ class Session:
                 nodes.append(self._project_node(self.project, active=True))
                 continue
             try:
-                nodes.append(self._project_node(load_project(path), active=False))
+                nodes.append(self._inactive_node(path))
             except ProjectError:
                 continue
         if kept != self.settings.recent:
@@ -1037,6 +1296,20 @@ class Session:
             else:
                 node["label"] = node["name"]
         return nodes
+
+    def _inactive_node(self, path: Path) -> dict:
+        """A recent project that is not open. Reloaded when its project file changes."""
+        try:
+            stat = path.stat()
+        except OSError as exc:
+            raise ProjectError(str(exc)) from exc
+        sig = (stat.st_mtime_ns, stat.st_size)
+        cached = self._node_cache.get(str(path))
+        if cached is not None and cached[0] == sig:
+            return cached[1]
+        node = self._project_node(load_project(path), active=False)
+        self._node_cache[str(path)] = (sig, node)
+        return node
 
     def _stored_source_mark(self, source, latest) -> str:
         """A tree mark that does not read the document. Hashing happens on the worker."""
@@ -1064,12 +1337,15 @@ class Session:
         path, folder = self._keys_location()
         base = {"count": count, "path": path, "folder": folder}
         if self.project is None:
-            base["label"] = "Keys: none yet — add documents to detect entities."
+            base["label"] = "Keys: none yet. Add documents, then find identities."
             return base
         if self.viewing_version is not None:
             base["label"] = (
                 f"Keys: {ENTITIES_FILENAME} · {count} identities · read-only"
             )
+            return base
+        if count == 0:
+            base["label"] = "Keys: none yet."
             return base
         origin = keys_origin_label(self.keys_origin) if self.keys_origin else ""
         parts = [f"Keys: draft/{ENTITIES_FILENAME}", f"{count} identities"]
@@ -1123,6 +1399,7 @@ class Session:
             self.show_original,
             self.output_mode,
             str(self.viewing_version),
+            str(self.version_file),
             self.yaml_text,
             self.language,
             self.detection_profile,
@@ -1135,6 +1412,10 @@ class Session:
             self._preview_epoch,
             tuple(sorted((self.project.metadata if self.project else {}).items())),
             self._handoff_mark(),
+            tuple(
+                (item["id"], item["text"], item["document"], item["source"])
+                for item in self.annotations
+            ),
         )
 
     def _compose_state(self) -> dict:
@@ -1156,6 +1437,7 @@ class Session:
             ),
             "preview": self._preview(),
             "entities": rows,
+            "annotations": [dict(item) for item in self.annotations],
             "entity_error": entity_error,
             "language": self.language,
             "profile": self.detection_profile,
@@ -1173,6 +1455,8 @@ class Session:
                 str(self.viewing_version) if self.viewing_version else None
             ),
             "read_only": self.viewing_version is not None,
+            "scanned": bool(self.anonymized) and self.viewing_version is None,
+            "can_handoff": bool(self.anonymized),
             "metadata": self.project.metadata if self.project else {},
             "handoff": self._handoff_state(),
             "version": __version__,
@@ -1308,8 +1592,10 @@ class Session:
         self.anonymized = {}
         self.anonymizer = None
         self.yaml_text = ""
+        self.annotations = []
         self.selected = None
         self.viewing_version = None
+        self.version_file = None
         self.draft_view = None
         self.verification = None
         self.verification_acknowledged = False
@@ -1373,6 +1659,7 @@ class Session:
             review = self.yaml_text
             self.status = f"Opened {project.name}."
             self.error = None
+            self._load_annotations()
         if paths:
             self.auto_version = False
             self._load_paths(paths, review)
@@ -1498,15 +1785,17 @@ class Session:
             self.force_merge = True
             self._load_paths(files, review)
 
+    def _scanning(self) -> bool:
+        message = (self.busy or {}).get("message") or ""
+        return str(message).startswith("Finding identities")
+
     def select_document(self, path: str, *, version: str | None = None) -> None:
-        pending = False
         with self.lock:
             if version:
-                self._view_version(Path(version))
-            elif self.viewing_version is not None:
+                self._view_version(Path(version), Path(path))
+                return
+            if self.viewing_version is not None:
                 self._return_to_draft()
-                pending = self._pending_redetect
-                self._pending_redetect = False
             target = Path(path).expanduser()
             match = next(
                 (item for item in self.files if item == target or str(item) == path),
@@ -1515,11 +1804,9 @@ class Session:
             if match is None:
                 raise ApiError("That document is not in the open project.", 404)
             self.selected = match
-            self.show_original = False
-        if pending:
-            self._start_detect()
 
     def set_preview(self, *, format=None, original=None) -> None:
+        cancel = False
         with self.lock:
             if format:
                 if format not in FORMATS:
@@ -1532,6 +1819,16 @@ class Session:
                         save_project(self.project)
             if original is not None:
                 self.show_original = bool(original)
+                if self.show_original and self._scanning():
+                    # Drop the in-flight scan. The source is already on screen.
+                    self.generation += 1
+                    self.busy = None
+                    self.error = None
+                    self.status = "Showing the source. The scan stopped."
+                    self._touch_preview()
+                    cancel = True
+        if cancel:
+            detect_process.cancel()
 
     def set_settings(self, *, language=None, profile=None) -> None:
         redetect = False
@@ -1557,14 +1854,16 @@ class Session:
                         save_project(self.project)
                 redetect = True
             if self.viewing_version is not None and redetect:
-                self.status = "Saved — the draft is re-detected when you return to it."
-                self.force_merge = True
+                self.status = (
+                    "Saved. Find identities again when you return to the draft."
+                )
                 return
-            if redetect and self.readings:
+            if redetect and self.readings and self._has_review():
                 self.force_merge = True
-                self.status = "Setting changed — re-detecting (review is kept)…"
+                self.show_original = False
+                self.status = "Setting changed. Scanning again. The review is kept."
             elif redetect:
-                self.status = "Setting saved with the project."
+                self.status = "Saved. Find identities when you want the review."
                 redetect = False
         if redetect:
             self._start_detect()
@@ -2001,63 +2300,43 @@ class Session:
             return str(dest)
 
     # -------------------------------------------------------------- versions ---
-    def _view_version(self, version_path: Path) -> None:
+    def _view_version(self, version_path: Path, file_path: Path | None = None) -> None:
+        """Show one published file. The draft documents and review stay in place.
+
+        The file body is read on the preview worker, not on this call.
+        """
         if self.project is None:
             raise ApiError("No project is open.")
         version_path = Path(version_path)
-        if self.viewing_version is not None:
-            self._return_to_draft()
-        self.draft_view = {
-            "files": list(self.files),
-            "readings": dict(self.readings),
-            "anonymized": dict(self.anonymized),
-            "yaml": self.yaml_text,
-            "selected": self.selected,
-        }
         files = version_document_files(version_path)
-        self.files = files
-        self.readings = {}
-        self.anonymized = {}
-        for path in files:
-            try:
-                self.anonymized[path] = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-        keys = version_path / ENTITIES_FILENAME
-        if not keys.exists():
-            found = sorted((version_path / "output").rglob("config.yaml"))
-            keys = found[0] if found else keys
-        try:
-            self.yaml_text = keys.read_text(encoding="utf-8") if keys.exists() else ""
-        except OSError:
-            self.yaml_text = ""
+        if file_path is None:
+            chosen = files[0] if files else None
+        else:
+            wanted = Path(file_path)
+            chosen = next(
+                (item for item in files if item == wanted or str(item) == str(wanted)),
+                None,
+            )
+            if chosen is None:
+                raise ApiError("That document is not in the saved output.", 404)
         self.viewing_version = version_path
-        self.selected = files[0] if files else None
+        self.version_file = chosen
         self.show_original = False
         self.status = "Viewing the saved output · read-only."
+        self._touch_preview()
 
     def _return_to_draft(self) -> None:
-        if self.viewing_version is None or self.draft_view is None:
+        if self.viewing_version is None:
             return
-        state = self.draft_view
         self.viewing_version = None
+        self.version_file = None
         self.draft_view = None
-        self.files = state["files"]
-        self.readings = state["readings"]
-        self.anonymized = state["anonymized"]
-        self.yaml_text = state["yaml"]
-        self.selected = state["selected"]
         self.show_original = False
         self.status = "Viewing the current draft."
-        if self.force_merge and self.readings:
-            self.force_merge = True
-            # Caller holds the lock. select_document reads this after the
-            # restore and starts detection once the lock is released.
-            self._pending_redetect = True
+        self._touch_preview()
 
     def view_version(self, path: str) -> None:
         with self.lock:
-            self._pending_redetect = False
             self._view_version(Path(path))
 
     def reveal(self, path: str) -> bool:
@@ -2071,7 +2350,11 @@ class Session:
             if not self.readings:
                 raise ApiError("Add documents before re-running detection.")
             self.force_merge = True
-            self.status = "Re-running detection. The review is kept."
+            self.show_original = False
+            if self._has_review():
+                self.status = "Finding identities again. The review is kept."
+            else:
+                self.status = "Finding identities in every document."
         self._start_detect()
 
     def save_open_project(self) -> str:
@@ -2131,6 +2414,129 @@ class Session:
         with self.lock:
             self.status = f"Copied {source.name} to {destination}."
         return str(destination)
+
+    def review_bundle(self) -> dict:
+        """Keyword YAML and pseudonymized token text for the local agent.
+
+        Source text is left out. A document that has been read and not
+        pseudonymized yet is counted in ``withheld``.
+        """
+        with self.lock:
+            documents = []
+            withheld = 0
+            for path in self.files:
+                text = self.anonymized.get(path)
+                if text is None or not str(text).strip():
+                    if path in self.readings:
+                        withheld += 1
+                    continue
+                documents.append({"name": path.name, "text": str(text)})
+            return {
+                "yaml": self.yaml_text or "",
+                "documents": documents,
+                "withheld": withheld,
+            }
+
+    def _annotations_path(self) -> Path | None:
+        project = self.project
+        if project is None or project.workdir is None:
+            return None
+        return project.workdir / "draft" / "annotations.json"
+
+    def _load_annotations(self) -> None:
+        """Read the draft queue. Caller holds the lock.
+
+        A bad file leaves the queue empty.
+        """
+        path = self._annotations_path()
+        self.annotations = []
+        if path is None or not path.exists():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        rows = data.get("annotations") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            return
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            text = " ".join(str(row.get("text") or "").split())
+            if not text:
+                continue
+            self.annotations.append(
+                {
+                    "id": str(row.get("id") or secrets.token_hex(4)),
+                    "text": text[:400],
+                    "document": " ".join(str(row.get("document") or "").split())[:200],
+                    "source": bool(row.get("source")),
+                }
+            )
+
+    def _save_annotations(self) -> None:
+        path = self._annotations_path()
+        if path is None:
+            raise ApiError("Save the project before annotating.")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"schema_version": 1, "annotations": self.annotations}
+        tmp = path.with_name(f".{path.name}.tmp")
+        try:
+            tmp.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+        except OSError as exc:
+            tmp.unlink(missing_ok=True)
+            raise ApiError(f"Could not save the annotation queue: {exc}") from exc
+
+    def add_annotation(
+        self, text: str, document: str = "", source: bool = False
+    ) -> dict:
+        span = " ".join(str(text or "").split())
+        if not span:
+            raise ApiError("Select some text first.")
+        if len(span) > 400:
+            raise ApiError("Annotate a short span, not a whole passage.")
+        name = " ".join(str(document or "").split())[:200]
+        with self.lock:
+            if self.project is None:
+                raise ApiError("Open a project before annotating.")
+            key = (span.casefold(), name.casefold())
+            for item in self.annotations:
+                if (item["text"].casefold(), item["document"].casefold()) == key:
+                    self.status = "Already queued for the local model."
+                    return {
+                        "annotations": [dict(row) for row in self.annotations],
+                        "added": False,
+                    }
+            self.annotations.append(
+                {
+                    "id": secrets.token_hex(4),
+                    "text": span,
+                    "document": name,
+                    "source": bool(source),
+                }
+            )
+            self._save_annotations()
+            self.status = "Queued for the local model."
+            return {
+                "annotations": [dict(row) for row in self.annotations],
+                "added": True,
+            }
+
+    def drop_annotation(self, anno_id: str) -> dict:
+        with self.lock:
+            if self.project is None:
+                raise ApiError("Open a project before annotating.")
+            kept = [item for item in self.annotations if item["id"] != str(anno_id)]
+            if len(kept) == len(self.annotations):
+                raise ApiError("That annotation is not in the queue.", 404)
+            self.annotations = kept
+            self._save_annotations()
+            self.status = "Removed from the queue."
+            return {"annotations": [dict(row) for row in self.annotations]}
 
     def keys_document(self) -> dict:
         with self.lock:

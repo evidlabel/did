@@ -78,6 +78,74 @@ function agentPaste(preview, selection) {
   return String(text);
 }
 
+function fenced(text, info) {
+  let fence = "```";
+  while (text.includes(fence)) fence += "`";
+  return info ? `${fence}${info}\n${text}\n${fence}` : `${fence}\n${text}\n${fence}`;
+}
+
+function fullCheck(yaml, documents, withheld) {
+  // One local-agent pass: the identity map, then every pseudonymized document.
+  // A blank map and no text is not a check. Source text never belongs here.
+  const map = typeof yaml === "string" ? yaml.replace(/\s+$/, "") : "";
+  const docs = [];
+  for (const doc of Array.isArray(documents) ? documents : []) {
+    const text = doc && typeof doc.text === "string" ? doc.text.replace(/\s+$/, "") : "";
+    if (!text.trim()) continue;
+    const name = String(doc.name == null ? "" : doc.name).replace(/\s+/g, " ").trim() || "document";
+    docs.push({ name, text });
+  }
+  if (!map.trim() && !docs.length) return null;
+  const lines = [
+    "Full check for the local pseudonymizer. The YAML is the identity map (draft/entities.yaml). Each following block is pseudonymized text, not the source. Tokens such as #(P1V1) and [PERSON 1] stand in for identifiers.",
+    "Reply in this terminal with three lists. Do not edit draft/entities.yaml. The GUI holds its own copy and would overwrite a file change. Do not ask for the original text.",
+    "1. Remove: trivial entries (a single letter, a stray number) and entries that are not PII.",
+    "2. Variants: forms of the same person, or the same organisation, that are separate entries. Name the identity that should keep them, and which entries should be added to its variants list.",
+    "3. Leftovers: real identifiers still visible in the pseudonymized text. Name the document.",
+    "",
+  ];
+  if (map.trim()) lines.push("Keyword YAML:", fenced(map, "yaml"), "");
+  else lines.push("Keyword YAML: none yet.", "");
+  const skipped = Number(withheld) > 0 ? Number(withheld) : 0;
+  if (skipped) {
+    const noun = skipped === 1 ? "document is" : "documents are";
+    lines.push(`${skipped} ${noun} still source text and not included.`, "");
+  }
+  if (!docs.length) lines.push("Pseudonymized text: none yet. Skip leftovers.");
+  else for (const doc of docs) lines.push(doc.name, fenced(doc.text), "");
+  return lines.join("\n").replace(/\n+$/, "\n");
+}
+
+function annotationQueue(yaml, items) {
+  // Spans a person marked. The local model places each one. An empty queue is not a job.
+  const rows = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const text = item && typeof item.text === "string" ? item.text.trim() : "";
+    if (!text) continue;
+    const name = String(item.document == null ? "" : item.document).replace(/\s+/g, " ").trim();
+    const where = item.source ? "source view" : "pseudonymized view";
+    rows.push(name ? `${text} — ${name} (${where})` : `${text} — (${where})`);
+  }
+  if (!rows.length) return null;
+  const map = typeof yaml === "string" ? yaml.replace(/\s+$/, "") : "";
+  const lines = [
+    "These spans were annotated in the review window and queued for you. They are not in the identity map yet.",
+    "The YAML is the current map (draft/entities.yaml). Reply in this terminal. Do not edit that file. The GUI holds its own copy and would overwrite a file change.",
+    "A span marked source view is original wording. Keep it in this terminal.",
+    "For each span, say one of:",
+    "1. Remove: it is trivial (a single letter, a stray number) or not PII.",
+    "2. Variants: it is the same person or the same organisation as an existing identity. Name that identity and add the span to its variants list.",
+    "3. New: it is a real identifier with no identity yet. Name the type.",
+    "",
+    "Annotations:",
+    ...rows.map((row, index) => `${index + 1}. ${row}`),
+    "",
+  ];
+  if (map.trim()) lines.push("Keyword YAML:", fenced(map, "yaml"));
+  else lines.push("Keyword YAML: none yet.");
+  return lines.join("\n").replace(/\n+$/, "\n");
+}
+
 function keywordReview(yaml) {
   // The local agent reviews the identity map. A blank map is not a review.
   const text = typeof yaml === "string" ? yaml.replace(/\s+$/, "") : "";
@@ -105,6 +173,27 @@ function agentSubmit(text) {
   };
 }
 
+// Preview header. Key is the source. The others are renderings of the review.
+const PREVIEW_MODES = [
+  { id: "placeholder", format: "plain" },
+  { id: "tokens", format: "typst" },
+  { id: "fake", format: "synthetic" },
+  { id: "redacted", format: "redacted" },
+  { id: "key", format: null },
+];
+
+function previewModeId(format, showingSource) {
+  if (showingSource) return "key";
+  const match = PREVIEW_MODES.find((item) => item.format && item.format === format);
+  return match ? match.id : "tokens";
+}
+
+function previewModeBody(mode) {
+  const row = PREVIEW_MODES.find((item) => item.id === mode);
+  if (row && row.id === "key") return { original: true };
+  return { original: false, format: (row && row.format) || "typst" };
+}
+
 function findWrap(text, query, fromIndex, backward) {
   if (!query) return null;
   const hay = text.toLowerCase();
@@ -124,13 +213,16 @@ function findWrap(text, query, fromIndex, backward) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { tokenSpans, tokenAt, findWrap, agentPaste, keywordReview, agentSubmit };
+  module.exports = {
+    tokenSpans, tokenAt, findWrap, agentPaste, keywordReview, fullCheck, annotationQueue, agentSubmit,
+    PREVIEW_MODES, previewModeId, previewModeBody,
+  };
 }
 
 if (typeof document !== "undefined") {
   const $ = (id) => document.getElementById(id);
   const params = new URLSearchParams(location.search);
-  const EMBED = params.get("embed") === "1";  // inside the workbench: one case, one project
+  const EMBED = params.get("embed") === "1";  // inside the workbench: hide the agent pane (Write owns terminals)
   if (EMBED) document.body.classList.add("embed");
   function setForcedTheme(name) {  // "light" | "dark" from the workbench; else the system
     if (name === "light" || name === "dark") document.documentElement.dataset.theme = name;
@@ -156,6 +248,7 @@ if (typeof document !== "undefined") {
     entitiesKey: "",
     treeKey: "",
     agentDir: null,
+    outputOpen: false,
   };
   let modalCallback = null;
 
@@ -191,21 +284,22 @@ if (typeof document !== "undefined") {
     $("status").classList.toggle("err", Boolean(data.error));
     $("project-name").textContent = data.project_name || "No project";
     const ho = data.handoff || { pending: 0, set: "" };
-    $("to-evid").disabled = !data.workdir || Boolean(data.read_only);
-    $("to-evid").classList.toggle("pending", ho.pending > 0);
-    $("to-evid-state").textContent = ho.set
+    $("handoff").disabled = !data.can_handoff;
+    $("handoff").classList.toggle("pending", ho.pending > 0);
+    const evidNote = ho.set
       ? `${ho.set} · ${ho.pending ? ho.pending + " to hand off" : "up to date"}`
       : "";
+    $("handoff").title = evidNote
+      ? `Copy, package, or send the reviewed text. ${evidNote}`
+      : "Copy, package, or send the reviewed text. Identity mappings are never included.";
     if (window.parent !== window && ho.pending !== state.badge) {
       state.badge = ho.pending;  // the workbench shows it on the Anonymization tab
       window.parent.postMessage({ type: "workbench-badge", count: ho.pending }, "*");
     }
     $("keys").textContent = (data.keys && data.keys.label) || "";
     $("keys").title = (data.keys && data.keys.path) || "";
-    $("keys-folder").disabled = !(data.keys && data.keys.folder);
     $("lang").value = data.language;
     $("profile").value = data.profile;
-    $("format").value = data.format;
     const busy = Boolean(data.busy);
     document.body.classList.toggle("busy", busy);
     $("busy").hidden = !busy;
@@ -220,28 +314,64 @@ if (typeof document !== "undefined") {
     if (entitiesKey !== state.entitiesKey) {
       state.entitiesKey = entitiesKey;
       renderEntities(data);
+      renderAnnotations(data);
     }
-    $("original").classList.toggle("on", data.preview && data.preview.original);
-    $("original").disabled = !(data.preview && data.preview.can_original);
+    const active = (data.projects || []).find((project) => project.active);
+    const hasDocs = Boolean(active && (active.documents || []).length);
+    const preview = data.preview || {};
+    const finding = Boolean(data.busy && /Finding identities/i.test(data.busy.message || ""));
+    const showingSource =
+      preview.state === "RAW" || Boolean(preview.original) ||
+      (preview.state === "UNANON" && !finding);
+    const picker = $("view-mode");
+    const mode = previewModeId(data.format, showingSource);
+    if (picker.value !== mode) picker.value = mode;
+    const keyOpt = picker.querySelector('option[value="key"]');
+    const canKey = Boolean(preview.can_original || preview.state === "UNANON");
+    if (keyOpt) keyOpt.disabled = !canKey;
+    picker.disabled = !hasDocs && !canKey;
     $("read-only").hidden = !data.read_only;
+    const langLabel = ($("lang").selectedOptions[0] && $("lang").selectedOptions[0].textContent) || "Settings";
+    $("settings").textContent = langLabel;
+    const saveLabel = ($("save-mode").selectedOptions[0] && $("save-mode").selectedOptions[0].textContent) || "";
+    $("save").hidden = !data.scanned;
+    $("save").disabled = Boolean(data.read_only) || busy || !data.scanned;
+    $("save").title = saveLabel
+      ? `Write the pseudonymized output (${saveLabel}). It replaces the previous output.`
+      : "Write the pseudonymized output for this project.";
+    const scanning = busy && data.busy && /Finding identities/i.test(data.busy.message || "");
+    $("scan").hidden = Boolean(data.scanned) || Boolean(data.read_only) || !hasDocs;
+    $("scan").disabled = busy || Boolean(data.read_only) || !hasDocs;
+    $("scan").textContent = scanning ? "Finding identities…" : "Find identities";
+    $("scan-again").hidden = !data.scanned || Boolean(data.read_only);
+    const noIdentities = !(data.entities || []).length;
+    const excluded = (active && active.excluded) || [];
+    $("entity-excluded").hidden = !excluded.length;
+    $("entity-excluded").textContent = excluded.length ? `Excluded (${excluded.length})` : "";
+    $("entity-excluded").title = excluded.join("\n");
+    $("entity-empty").hidden = !noIdentities;
+    $("entities").hidden = noIdentities;
+    $("entity-search").hidden = noIdentities;
+    $("entity-type").hidden = noIdentities;
+    $("entity-tools").classList.toggle("quiet", noIdentities);
+    const canAsk = Boolean(data.scanned) || Boolean(data.read_only) || !noIdentities;
+    $("ask-agent").hidden = !canAsk;
+    syncEntityEdit();
     const agentDir = data.workdir || "";
     if (agentDir !== state.agentDir) {
       state.agentDir = agentDir;
       termProjectChanged();
     }
-    const active = (data.projects || []).find((project) => project.active);
-    const hasDocs = Boolean(active && (active.documents || []).length);
-    $("redetect").disabled = Boolean(data.read_only) || !hasDocs;
   }
 
   function renderTree(data) {
     const root = $("tree");
     root.textContent = "";
-    for (const project of (data.projects || []).filter((p) => !EMBED || p.active)) {
+    for (const project of (data.projects || [])) {
       const block = document.createElement("div");
       block.className = "project" + (project.active ? " active" : "");
       const head = document.createElement("div");
-      head.className = "row";
+      head.className = "row head";
       head.innerHTML = `<span class="mark">${project.mark || ""}</span><b></b>`;
       head.querySelector("b").textContent = project.label || project.name;
       head.title = project.path;
@@ -252,13 +382,19 @@ if (typeof document !== "undefined") {
       };
       block.appendChild(head);
       if (project.active) {
+        block.appendChild(groupLabel("Documents"));
         for (const doc of project.documents || []) {
           block.appendChild(docRow(doc, project));
         }
         if (project.output) {
+          const files = project.output.files || [];
           const out = document.createElement("div");
-          out.className = "row muted";
-          out.textContent = `${project.output.mark} Output  ${project.output.mode}`;
+          out.className = "row fold";
+          out.textContent = `${state.outputOpen ? "▾" : "▸"} Output · ${files.length} · read-only`;
+          out.onclick = () => {
+            state.outputOpen = !state.outputOpen;
+            renderTree(data);
+          };
           out.oncontextmenu = (event) => {
             event.preventDefault();
             menu(event, [
@@ -268,53 +404,29 @@ if (typeof document !== "undefined") {
             ]);
           };
           block.appendChild(out);
-          for (const file of project.output.files || []) {
-            const row = document.createElement("div");
-            row.className = "row child" + (file.selected ? " sel" : "");
-            row.textContent = file.name;
-            row.onclick = () =>
-              api("/api/documents/select", {
-                path: file.path,
-                version: project.output.path,
-              }).then(refresh);
-            row.oncontextmenu = (event) => {
-              event.preventDefault();
-              menu(event, [
-                ["View original text", () => viewOriginal(file, project.output.path)],
-                ["Copy path", () => copyPath(file.path)],
-                ["Reveal folder", () => api("/api/reveal", { path: file.path })],
-              ]);
-            };
-            block.appendChild(row);
+          if (state.outputOpen) {
+            for (const file of files) {
+              const row = document.createElement("div");
+              row.className = "row output-file" + (file.selected ? " sel" : "");
+              row.textContent = file.label || file.name;
+              row.title = file.name;
+              row.onclick = () =>
+                api("/api/documents/select", {
+                  path: file.path,
+                  version: project.output.path,
+                }).then(refresh);
+              row.oncontextmenu = (event) => {
+                event.preventDefault();
+                menu(event, [
+                  ["View original text", () => viewOriginal(file, project.output.path)],
+                  ["Copy path", () => copyPath(file.path)],
+                  ["Reveal folder", () => api("/api/reveal", { path: file.path })],
+                ]);
+              };
+              block.appendChild(row);
+            }
           }
         }
-        const keys = document.createElement("div");
-        keys.className = "row link";
-        keys.textContent = "Keys";
-        keys.onclick = () => showKeys();
-        keys.oncontextmenu = (event) => {
-          event.preventDefault();
-          const folder = (data.keys && data.keys.folder) || "";
-          const path = (data.keys && data.keys.path) || "";
-          menu(event, [
-            ["Show keys (Advanced YAML)", () => showKeys()],
-            ["Copy path", () => copyPath(path)],
-            ["Reveal folder", () => api("/api/reveal", { path: folder })],
-          ]);
-        };
-        block.appendChild(keys);
-        if ((project.excluded || []).length) {
-          const excluded = document.createElement("div");
-          excluded.className = "row muted";
-          excluded.textContent = `Excluded (${project.excluded.length})`;
-          excluded.title = project.excluded.join("\n");
-          block.appendChild(excluded);
-        }
-        const meta = document.createElement("div");
-        meta.className = "row link";
-        meta.textContent = "Meta";
-        meta.onclick = () => editMeta(project);
-        block.appendChild(meta);
       }
       root.appendChild(block);
     }
@@ -323,10 +435,18 @@ if (typeof document !== "undefined") {
     }
   }
 
+  function groupLabel(text) {
+    const row = document.createElement("div");
+    row.className = "row group";
+    row.textContent = text;
+    return row;
+  }
+
   function docRow(doc, project) {
     const row = document.createElement("div");
     row.className = "row child" + (doc.selected ? " sel" : "") + (doc.missing ? " missing" : "");
-    row.textContent = `${doc.mark || ""} ${doc.name}  ${doc.mode}`;
+    const modeLabel = { UNANON: "source", PSEUDO: "review", PENDING: "" }[doc.mode] || "";
+    row.textContent = `${doc.mark || ""} ${doc.name}${modeLabel ? "  " + modeLabel : ""}`;
     row.title = doc.path;
     row.onclick = () => api("/api/documents/select", { path: doc.path }).then(refresh);
     row.oncontextmenu = (event) => {
@@ -348,6 +468,10 @@ if (typeof document !== "undefined") {
       ["Meta", () => editMeta(project)],
       ["Copy path", () => copyPath(project.path)],
       ["Reveal folder", () => api("/api/reveal", { path: project.path })],
+      ["Reveal keys folder", () => {
+        const folder = (state.data && state.data.keys && state.data.keys.folder) || "";
+        if (folder) api("/api/reveal", { path: folder });
+      }],
       ["Remove from list", () => api("/api/project/remove", { path: project.path }).then(refresh)],
       [
         "Delete workdir…",
@@ -409,7 +533,9 @@ if (typeof document !== "undefined") {
     pre.dataset.plain = plain ? "1" : "0";
     pre.textContent = "";
     if (!text) {
-      pre.textContent = "No document.";
+      pre.textContent = data.project_name
+        ? "Add a document to read it here."
+        : "Open a project to begin.";
       return;
     }
     if (plain) {
@@ -438,6 +564,39 @@ if (typeof document !== "undefined") {
         (span.variant == null || Number(row.dataset.variantIndex) === span.variant);
       row.classList.toggle("hit", match);
       if (match) row.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function renderAnnotations(data) {
+    const box = $("anno-queue");
+    const list = $("anno-list");
+    if (!box || !list) return;
+    const items = data.annotations || [];
+    box.hidden = !items.length;
+    $("anno-count").textContent = items.length ? `Queue · ${items.length}` : "Queue";
+    const key = JSON.stringify(items);
+    if (list.dataset.key === key) return;
+    list.dataset.key = key;
+    list.textContent = "";
+    for (const item of items) {
+      const li = document.createElement("li");
+      const span = document.createElement("span");
+      span.textContent = item.text;
+      li.appendChild(span);
+      if (item.document) {
+        const doc = document.createElement("span");
+        doc.className = "doc";
+        doc.textContent = ` · ${item.document}`;
+        li.appendChild(doc);
+      }
+      li.title = item.source
+        ? "Annotated from the source view. It stays on this machine until the local model answers."
+        : "Annotated from the pseudonymized view.";
+      li.oncontextmenu = (event) => {
+        event.preventDefault();
+        menu(event, [["Remove", () => dropAnnotation(item.id)]]);
+      };
+      list.appendChild(li);
     }
   }
 
@@ -470,9 +629,45 @@ if (typeof document !== "undefined") {
           for (const other of body.querySelectorAll("tr")) other.classList.remove("sel");
         }
         tr.classList.toggle("sel");
+        syncEntityEdit();
       };
       body.appendChild(tr);
     }
+    syncEntityEdit();
+  }
+
+  function manualEdits() {
+    const box = $("manual-edits");
+    return Boolean(box && box.checked);
+  }
+
+  function selectionInPreview() {
+    const preview = $("preview");
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount || !preview) return false;
+    const node = sel.anchorNode;
+    const el = node && (node.nodeType === 1 ? node : node.parentElement);
+    return Boolean(el && preview.contains(el));
+  }
+
+  function syncEntityEdit() {
+    const button = $("entity-edit");
+    if (!button) return;
+    button.hidden = !manualEdits() || (selectedRows().length === 0 && !selectionInPreview());
+  }
+
+  function editMenu(event) {
+    const items = [];
+    if (selectedRows().length) {
+      for (const type of ["PERSON", "ORGANIZATION", "LOCATION", "EMAIL_ADDRESS", "PHONE_NUMBER"]) {
+        items.push([`Change type to ${type}`, () => changeType(type)]);
+      }
+      items.push(["Add variant", () => addVariant()]);
+      items.push(["Merge", () => mergeRows()]);
+      items.push(["Do not pseudonymize", () => markNotName()]);
+    }
+    if (selectionInPreview()) items.push(["Add selection", () => addFromSelection()]);
+    menu(event, items);
   }
 
   function selectedRows() {
@@ -530,75 +725,30 @@ if (typeof document !== "undefined") {
     });
   }
 
+  async function pickDialog(kind, start) {
+    try {
+      const result = await api("/api/fs/pick", { kind, path: start || "" });
+      if (!result || result.paths == null) return null;
+      return result.paths;
+    } catch (error) {
+      $("status").textContent = error.message;
+      $("status").classList.add("err");
+      return null;
+    }
+  }
+
   async function pickDir(start) {
-    return pick(start, "dir");
+    const paths = await pickDialog("directory", start);
+    return (paths && paths[0]) || null;
   }
 
   async function pickFiles(start) {
-    return pick(start, "files");
+    return pickDialog("files", start);
   }
 
   async function pickProjectFile(start) {
-    return pick(start, "project");
-  }
-
-  function pick(start, mode) {
-    return new Promise((resolve) => {
-      const chosen = new Set();
-      let projectFile = "";
-      const title =
-        mode === "dir" ? "Choose a folder" : mode === "project" ? "Open DID project" : "Add documents";
-      openModal(title, `<div id="fs"></div>`, async () => {
-        if (mode === "dir") resolve($("fs-path").dataset.path);
-        else if (mode === "project") resolve(projectFile || null);
-        else resolve([...chosen]);
-      });
-      $("modal-cancel").onclick = () => {
-        closeModal();
-        resolve(null);
-      };
-      const box = $("fs");
-      async function load(path) {
-        const query = path ? `?path=${encodeURIComponent(path)}` : "";
-        const listing = await (await fetch("/api/fs" + query)).json();
-        box.textContent = "";
-        const label = document.createElement("div");
-        label.id = "fs-path";
-        label.dataset.path = listing.path;
-        label.textContent = listing.path;
-        box.appendChild(label);
-        if (listing.parent) {
-          const up = document.createElement("button");
-          up.textContent = "Up";
-          up.onclick = () => load(listing.parent);
-          box.appendChild(up);
-        }
-        for (const entry of listing.entries) {
-          const row = document.createElement("button");
-          row.textContent = (entry.dir ? "📁 " : "📄 ") + entry.name;
-          const projectName = /\.(yaml|yml)$/i.test(entry.name);
-          row.onclick = () => {
-            if (entry.dir) {
-              load(entry.path);
-              return;
-            }
-            if (mode === "project" && projectName) {
-              projectFile = entry.path;
-              for (const button of box.querySelectorAll("button")) button.classList.remove("on");
-              row.classList.add("on");
-              return;
-            }
-            if (mode === "files") {
-              if (chosen.has(entry.path)) chosen.delete(entry.path);
-              else chosen.add(entry.path);
-              row.classList.toggle("on", chosen.has(entry.path));
-            }
-          };
-          box.appendChild(row);
-        }
-      }
-      load(start || "");
-    });
+    const paths = await pickDialog("project", start);
+    return (paths && paths[0]) || null;
   }
 
   async function addDocs(paths) {
@@ -694,9 +844,14 @@ if (typeof document !== "undefined") {
     selection.addRange(range);
   }
 
+  document.addEventListener("selectionchange", () => syncEntityEdit());
   document.addEventListener("click", (event) => {
     const box = $("menu");
     if (box && !box.contains(event.target)) box.remove();
+    const pop = $("settings-pop");
+    if (pop && !pop.hidden && !pop.contains(event.target) && event.target !== $("settings")) {
+      pop.hidden = true;
+    }
   });
 
   $("modal-ok").onclick = () => {
@@ -839,6 +994,36 @@ if (typeof document !== "undefined") {
     menu(event, items);
   }
 
+  function handoffMenu(event) {
+    const ho = (state.data && state.data.handoff) || {};
+    const evid = ho.set
+      ? `Send to evid · ${ho.set}${ho.pending ? ` (${ho.pending})` : ""}`
+      : "Send to evid…";
+    menu(event, [
+      ["Copy this document", () => copyLlm("current", "md")],
+      ["Copy this document as JSON", () => copyLlm("current", "json")],
+      ["Copy every document", () => copyLlm("all", "md")],
+      ["Copy every document as JSON", () => copyLlm("all", "json")],
+      ["Save a ZIP…", saveZip],
+      [evid, () => sendToEvid()],
+    ]);
+  }
+
+  async function sendToEvid() {
+    const ho = (state.data && state.data.handoff) || {};
+    let set = ho.set || "";
+    if (!set) {
+      set = (window.prompt("Hand off to which evid set? (the case's anon set, e.g. 2026-014-anon)", "") || "").trim();
+      if (!set) return;
+    }
+    try {
+      await api("/api/handoff", { set });
+    } catch (error) {
+      $("status").textContent = error.message;
+    }
+    refresh();
+  }
+
   function helpMenu(event) {
     menu(event, [
       ["Documentation", () => api("/api/open-url", { url: "https://github.com/evidlabel/did/tree/main/docs" })],
@@ -865,10 +1050,36 @@ if (typeof document !== "undefined") {
   $("side-open").onclick = () => openProject();
   $("menu-file").onclick = (event) => fileMenu(event);
   $("menu-help").onclick = (event) => helpMenu(event);
-  $("redetect").onclick = () => api("/api/detect").then(refresh);
-  $("keys-folder").onclick = () => {
-    const folder = state.data && state.data.keys && state.data.keys.folder;
-    if (folder) api("/api/reveal", { path: folder });
+  $("scan").onclick = () => api("/api/detect").then(refresh);
+  $("view-mode").onchange = () => {
+    const body = previewModeBody($("view-mode").value);
+    const data = state.data || {};
+    const hasReview = (data.entities || []).some((row) => row.id);
+    const ready = Boolean(body.original || data.scanned || data.read_only || hasReview);
+    const posted = api("/api/preview", body);
+    (ready ? posted : posted.then(() => api("/api/detect"))).then(refresh);
+  };
+  $("settings").onclick = (event) => {
+    event.stopPropagation();
+    const pop = $("settings-pop");
+    pop.hidden = !pop.hidden;
+    if (!pop.hidden) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - 240));
+      pop.style.left = left + "px";
+      pop.style.top = rect.bottom + 4 + "px";
+    }
+  };
+  $("ask-agent").onclick = () => {
+    reviewByAgent().catch((error) => termStatus(error.message, true));
+  };
+  $("scan-again").onclick = () => {
+    $("settings-pop").hidden = true;
+    api("/api/detect").then(refresh);
+  };
+  $("review-yaml").onclick = () => {
+    $("settings-pop").hidden = true;
+    showKeys();
   };
   $("add").onclick = async () => {
     const paths = await pickFiles(sourcesDir());
@@ -876,25 +1087,19 @@ if (typeof document !== "undefined") {
   };
   $("lang").onchange = () => api("/api/settings", { language: $("lang").value }).then(refresh);
   $("profile").onchange = () => api("/api/settings", { profile: $("profile").value }).then(refresh);
-  $("format").onchange = () => api("/api/preview", { format: $("format").value }).then(refresh);
-  $("original").onclick = () => {
-    const on = !(state.data && state.data.preview && state.data.preview.original);
-    api("/api/preview", { original: on }).then(refresh);
+  $("save-mode").onchange = () => {
+    if (state.data) render(state.data);
+  };
+  $("manual-edits").checked = termLoadFlag("did-manual-edits", "0") === "1";
+  $("manual-edits").onchange = () => {
+    termStore("did-manual-edits", $("manual-edits").checked ? "1" : "0");
+    syncEntityEdit();
   };
   $("save").onclick = async () => {
     await api("/api/save", { mode: $("save-mode").value });
     refresh();
   };
-  $("handoff").onclick = async (event) => {
-    event.stopPropagation();
-    menu(event, [
-      ["Copy current Markdown", () => copyLlm("current", "md")],
-      ["Copy current JSON", () => copyLlm("current", "json")],
-      ["Copy all Markdown", () => copyLlm("all", "md")],
-      ["Copy all JSON", () => copyLlm("all", "json")],
-      ["Save safe ZIP…", saveZip],
-    ]);
-  };
+  $("handoff").onclick = (event) => handoffMenu(event);
   $("find").onclick = () => {
     $("findbar").hidden = false;
     $("find-q").focus();
@@ -907,13 +1112,27 @@ if (typeof document !== "undefined") {
   };
   $("entity-search").oninput = () => state.data && renderEntities(state.data);
   $("entity-type").onchange = () => state.data && renderEntities(state.data);
-  $("type-change").onclick = async () => {
+  $("entity-edit").onclick = (event) => editMenu(event);
+  $("preview").oncontextmenu = (event) => {
+    const text = selectedPreviewText();
+    if (!text) return;
+    event.preventDefault();
+    menu(event, [["Annotate", () => annotateSelection().catch((error) => {
+      $("status").textContent = error.message;
+      $("status").classList.add("err");
+    })]]);
+  };
+  $("anno-send").onclick = () => {
+    sendAnnotationQueue().catch((error) => termStatus(error.message, true));
+  };
+
+  async function changeType(type) {
     const ids = selectedRows().map((row) => row.dataset.id).filter(Boolean);
-    const type = $("type-target").value;
     await api("/api/entities/type", { ids, type });
     refresh();
-  };
-  $("add-variant").onclick = async () => {
+  }
+
+  async function addVariant() {
     const row = selectedRows()[0];
     if (!row) return;
     const variant = await new Promise((resolve) => {
@@ -931,8 +1150,9 @@ if (typeof document !== "undefined") {
       position: Number(row.dataset.number),
     });
     refresh();
-  };
-  $("merge").onclick = async () => {
+  }
+
+  async function mergeRows() {
     const rows = selectedRows().filter((row) => row.dataset.type === "PERSON" && !row.dataset.variant);
     if (rows.length !== 2) {
       $("status").textContent = "Select two person identities to merge.";
@@ -940,17 +1160,71 @@ if (typeof document !== "undefined") {
     }
     await api("/api/entities/merge", { source: rows[0].dataset.id, target: rows[1].dataset.id });
     refresh();
-  };
-  $("not-name").onclick = async () => {
+  }
+
+  async function markNotName() {
     const ids = selectedRows().filter((row) => row.dataset.type === "PERSON").map((row) => row.dataset.id);
     await api("/api/entities/not-name", { ids });
     refresh();
-  };
-  $("from-selection").onclick = async () => {
+  }
+
+  async function addFromSelection() {
     const text = String(window.getSelection() || "");
     await api("/api/entities/from-selection", { text, type: "PERSON" });
     refresh();
-  };
+  }
+
+  function selectedPreviewText() {
+    if (!selectionInPreview()) return "";
+    return String(window.getSelection() || "").replace(/\s+/g, " ").trim();
+  }
+
+  function previewIsSource() {
+    const preview = state.data && state.data.preview;
+    return Boolean(
+      preview && (preview.original || preview.state === "RAW" || preview.state === "UNANON")
+    );
+  }
+
+  async function annotateSelection() {
+    const text = selectedPreviewText();
+    if (!text) {
+      $("status").textContent = "Select some text, then right-click Annotate.";
+      $("status").classList.add("err");
+      return;
+    }
+    const preview = state.data && state.data.preview;
+    await api("/api/annotations", {
+      text,
+      document: (preview && preview.name) || "",
+      source: previewIsSource(),
+    });
+    refresh();
+  }
+
+  async function dropAnnotation(id) {
+    await api("/api/annotations/remove", { id });
+    refresh();
+  }
+
+  async function sendAnnotationQueue() {
+    const items = (state.data && state.data.annotations) || [];
+    let yaml = "";
+    try {
+      const keys = await api("/api/keys", {});
+      yaml = keys.yaml || "";
+    } catch (error) {
+      termStatus(error.message, true);
+      return;
+    }
+    const text = annotationQueue(yaml, items);
+    if (!text) {
+      termStatus("Nothing is queued. Select text and right-click Annotate.", true);
+      return;
+    }
+    const sent = await sendToAgent(text, true);
+    if (sent) termStatus("Sent the annotation queue to the local model.", false);
+  }
 
   async function copyLlm(scope, form) {
     const payload = await api("/api/llm", { scope, form });
@@ -985,7 +1259,8 @@ if (typeof document !== "undefined") {
     if (event.target.closest && event.target.closest("#termpane")) {
       if (mod && key === "q" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
-        api("/api/quit").catch(() => {});
+        if (window.parent !== window) window.parent.postMessage({ type: "workbench-quit" }, "*");
+        else api("/api/quit").catch(() => {});
       }
       return;
     }
@@ -995,9 +1270,10 @@ if (typeof document !== "undefined") {
       $("find-q").focus();
       return;
     }
-    if (mod && key === "q") {
+    if (mod && !event.shiftKey && !event.altKey && (key === "q" || (key === "w" && window.parent !== window))) {
       event.preventDefault();
-      api("/api/quit").catch(() => {});
+      if (window.parent !== window) window.parent.postMessage({ type: "workbench-quit" }, "*");
+      else api("/api/quit").catch(() => {});
       return;
     }
     if (mod && event.shiftKey && key === "o") {
@@ -1483,21 +1759,21 @@ if (typeof document !== "undefined") {
     return true;
   }
 
-  async function checkPseudonymization() {
+  async function reviewByAgent() {
     let payload;
     try {
-      payload = await api("/api/keys", {});
+      payload = await api("/api/review-bundle", {});
     } catch (error) {
       termStatus(error.message, true);
       return;
     }
-    const text = keywordReview(payload.yaml || "");
+    const text = fullCheck(payload.yaml || "", payload.documents || [], payload.withheld);
     if (!text) {
-      termStatus("There are no keywords to review yet.", true);
+      termStatus("Nothing to check yet.", true);
       return;
     }
     const sent = await sendToAgent(text, true);
-    if (sent) termStatus("Sent the keyword YAML to the agent.", false);
+    if (sent) termStatus("Sent the keyword YAML and the pseudonymized text to the local agent.", false);
   }
 
   function termBoot() {
@@ -1527,9 +1803,6 @@ if (typeof document !== "undefined") {
         return;
       }
       sendToAgent(text);
-    };
-    $("check-pseudo").onclick = () => {
-      checkPseudonymization().catch((error) => termStatus(error.message, true));
     };
     $("t-ext").onclick = async () => {
       try {
@@ -1562,27 +1835,13 @@ if (typeof document !== "undefined") {
     matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
       for (const pane of T.list) pane.term.options.theme = termTheme();
     });
-    if (termLoadFlag("did-term", "1") !== "0") openTerm(true);
+    if (termLoadFlag("did-term", "0") === "1") openTerm(true);
   }
 
   setInterval(() => {
     if (state.data && state.data.busy) refresh().catch(() => {});
   }, 400);
-  $("to-evid").onclick = async () => {
-    const ho = (state.data && state.data.handoff) || {};
-    let set = ho.set || "";
-    if (!set) {
-      set = (window.prompt("Hand off to which evid set? (the case's anon set, e.g. 2026-014-anon)", "") || "").trim();
-      if (!set) return;
-    }
-    try {
-      await api("/api/handoff", { set });
-    } catch (error) {
-      $("status").textContent = error.message;
-    }
-    refresh();
-  };
-  termBoot();
+  if (!EMBED) termBoot();  // embedded in the workbench: no agent pane (the Write tab owns terminals)
   (async () => {
     const project = params.get("project");
     if (project) {
