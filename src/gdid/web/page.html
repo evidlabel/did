@@ -14,6 +14,7 @@
   --control: #fff; --control-line: #6d7d89; --control-hover: #d5e6ee;
   --err: #8d1d18; --ok: #1d6b3a; --warn: #8a5a00;
   --mono: ui-monospace, "DejaVu Sans Mono", monospace;
+  --sans: system-ui, sans-serif; --sans-weight: 400;
   --p-P: #0050b3; --p-O: #a33a00; --p-E: #0a7d72; --p-A: #8a6d00; --p-PH: #7a2da0;
   --p-DT: #7a2da0; --p-ID: #b3261e; --p-CD: #b3261e; --p-GN: #b3261e; --p-URL: #3a7d1e; --p-DOC: #5a6472; --p-W: #0050b3;
 }
@@ -42,7 +43,7 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
-body { background: var(--bg); color: var(--fg); font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+body { background: var(--bg); color: var(--fg); font: 13px/1.4 var(--sans); font-weight: var(--sans-weight); overflow: hidden; }
 button, input, select, textarea {
   font: inherit; color: var(--fg); background: var(--control);
   border: 1px solid var(--control-line); border-radius: 5px;

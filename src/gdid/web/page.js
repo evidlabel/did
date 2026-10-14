@@ -224,7 +224,7 @@ if (typeof document !== "undefined") {
   const params = new URLSearchParams(location.search);
   const EMBED = params.get("embed") === "1";  // inside the workbench: hide the agent pane (Write owns terminals)
   if (EMBED) document.body.classList.add("embed");
-  function setForcedTheme(name) {  // "light" | "dark" from the workbench; else the system
+  function setForcedTheme(name) {  // "light" | "dark"; else the system
     if (name === "light" || name === "dark") document.documentElement.dataset.theme = name;
     else delete document.documentElement.dataset.theme;
     try {
@@ -233,11 +233,36 @@ if (typeof document !== "undefined") {
       // the terminals are not set up yet (first call, at load)
     }
   }
+  // In the workbench the theme arrives as data: a light or dark base, the workbench's core colours
+  // (mapped onto this page's own) and its fonts. Alone, did stays on ?theme= or the system.
+  const WB_VARS = {
+    bg: ["--bg"], panel: ["--panel", "--control"], sunk: ["--panel2", "--hover"], line: ["--line"], ink: ["--fg"],
+    muted: ["--muted", "--control-line"], accent: ["--accent", "--accent-hover"], "accent-low": ["--sel", "--control-hover"],
+    "on-accent": ["--accent-fg"], warn: ["--warn"], err: ["--err"],
+  };
+  function workbenchTheme(data) {
+    const style = document.documentElement.style, tokens = data.tokens || {}, fonts = data.fonts || {};
+    for (const [key, vars] of Object.entries(WB_VARS)) {
+      for (const v of vars) tokens[key] ? style.setProperty(v, tokens[key]) : style.removeProperty(v);
+    }
+    for (const [v, x] of [["--sans", fonts.sans], ["--sans-weight", fonts.weight], ["--mono", fonts.mono]]) {
+      x ? style.setProperty(v, x) : style.removeProperty(v);
+    }
+    if (/^https?:\/\//.test(fonts.css || "")) {
+      let link = document.getElementById("wb-fonts");
+      if (!link) {
+        link = document.createElement("link");
+        link.id = "wb-fonts";
+        link.rel = "stylesheet";
+        document.head.append(link);
+      }
+      if (link.href !== fonts.css) link.href = fonts.css;
+    }
+    setForcedTheme(data.scheme);
+  }
   setForcedTheme(params.get("theme"));
   window.addEventListener("message", (event) => {
-    if (event.source === window.parent && event.data && event.data.type === "workbench-theme") {
-      setForcedTheme(event.data.theme);
-    }
+    if (event.source === window.parent && event.data && event.data.type === "workbench-theme") workbenchTheme(event.data);
   });
   if (window.parent !== window) window.parent.postMessage({ type: "workbench-hello" }, "*");
   const state = {
@@ -1256,6 +1281,11 @@ if (typeof document !== "undefined") {
   document.addEventListener("keydown", (event) => {
     const key = event.key.toLowerCase();
     const mod = event.ctrlKey || event.metaKey;
+    if (window.parent !== window && event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && (event.key === "PageUp" || event.key === "PageDown")) {
+      event.preventDefault();  // the workbench cycles its tabs
+      window.parent.postMessage({ type: "workbench-tab", step: event.key === "PageDown" ? 1 : -1 }, "*");
+      return;
+    }
     if (event.target.closest && event.target.closest("#termpane")) {
       if (mod && key === "q" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
@@ -1479,6 +1509,7 @@ if (typeof document !== "undefined") {
     pane.term.onData((data) => termSend(pane, { t: "in", d: data }));
     pane.term.attachCustomKeyEventHandler((event) => {
       if (event.ctrlKey && !event.shiftKey && !event.altKey && event.code === "KeyQ") return false;
+      if (window.parent !== window && event.ctrlKey && !event.shiftKey && !event.altKey && (event.key === "PageUp" || event.key === "PageDown")) return false;  // tab cycling, above
       if (event.type !== "keydown" || !event.ctrlKey || !event.shiftKey) return true;
       if (event.code === "KeyC") {
         const text = pane.term.getSelection();
