@@ -185,7 +185,7 @@ wheels = [
 
 [[package]]
 name = "did"
-version = "0.3.0"
+version = "0.3.2"
 source = { editable = "." }
 dependencies = [
     { name = "bibtexparser" },
@@ -249,7 +249,7 @@ requires-dist = [
     { name = "sv-core-news-lg", marker = "extra == 'models'", url = "https://github.com/explosion/spacy-models/releases/download/sv_core_news_lg-3.8.0/sv_core_news_lg-3.8.0-py3-none-any.whl" },
     { name = "sv-core-news-sm", marker = "extra == 'all'", url = "https://github.com/explosion/spacy-models/releases/download/sv_core_news_sm-3.8.0/sv_core_news_sm-3.8.0-py3-none-any.whl" },
     { name = "sv-core-news-sm", marker = "extra == 'models'", url = "https://github.com/explosion/spacy-models/releases/download/sv_core_news_sm-3.8.0/sv_core_news_sm-3.8.0-py3-none-any.whl" },
-    { name = "treeparse", specifier = ">=0.2.8" },
+    { name = "treeparse", specifier = ">=0.4.0" },
 ]
 provides-extras = ["gui", "models", "all"]
 
@@ -1034,16 +1034,16 @@ wheels = [
 
 [[package]]
 name = "treeparse"
-version = "0.3.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "rich" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/94/f6/f149db70c753ba35855c1701d2b1c7a0ec3815021a14e0dab137842b0f17/treeparse-0.3.0.tar.gz", hash = "sha256:1468738dbd6421d4680a1895edd6507107585ff15759bf8d4ac62623d35390d7", size = 19270, upload-time = "2026-06-03T08:06:06.541Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/65/05/aa5e2b35f5989bd8e5bc5885d9f08ac0aa892eb90e7eaf48d5fd2cb5709d/treeparse-0.4.0.tar.gz", hash = "sha256:a57e9c33f313c6071645941d49bd1aa24d6a5e3f96d3848ac8be331b348c8a82", size = 24390, upload-time = "2026-10-09T07:50:18.288Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/c2/db07610ab141020cdce65a5030979b9a3783d5111c405b9998768571d456/treeparse-0.3.0-py3-none-any.whl", hash = "sha256:98bc51ec14019df0bf19d292ebeba5329e60bc09833d56d4e2d709720f6a51d1", size = 24221, upload-time = "2026-06-03T08:06:05.172Z" },
+    { url = "https://files.pythonhosted.org/packages/56/bf/df74a2bc849ed5cd29308222ad1d4401c369ba4b3e4da35ee3337a92e2e9/treeparse-0.4.0-py3-none-any.whl", hash = "sha256:fa6879c8932d4dfa84fa3077d2e52581b6b927e7543869c34175f86a14001ac0", size = 28465, upload-time = "2026-10-09T07:50:16.892Z" },
 ]
 
 [[package]]
