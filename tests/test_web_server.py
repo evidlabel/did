@@ -17,7 +17,6 @@ import pytest
 
 from gdid import pipeline
 from gdid.web.server import (
-    DEFAULT_AGENT,
     DidApp,
     Handler,
     ProjectAgents,
@@ -26,6 +25,7 @@ from gdid.web.server import (
     directory_dialog_command,
     external_terminal,
     file_dialog_command,
+    local_presets,
     lock_path,
     pick_directory,
     pick_paths,
@@ -1089,10 +1089,29 @@ def test_vendor_files(client):
         assert caught.value.code == 404
 
 
-def test_resolve_agent_defaults_to_the_local_qwen_pairing(monkeypatch):
+def _on_path(monkeypatch, *names):
+    monkeypatch.setattr(
+        "gdid.web.server.shutil.which",
+        lambda n: f"/usr/bin/{n}" if n in names else None,
+    )
+
+
+@pytest.mark.parametrize(
+    "installed, default",
+    [
+        (("ocprofile", "opencode"), "ocprofile launch local-qw38"),
+        (("opencode",), "opencode"),
+        ((), ""),
+    ],
+)
+def test_default_agent_follows_what_is_installed(monkeypatch, installed, default):
+    _on_path(monkeypatch, *installed)
     monkeypatch.delenv("DID_AGENT", raising=False)
-    assert resolve_agent(None) == DEFAULT_AGENT
-    assert DEFAULT_AGENT == "ocprofile launch local-qw38"
+    assert resolve_agent(None) == default
+    assert [p["command"] for p in local_presets()][:1] == ([default] if default else [])
+
+
+def test_resolve_agent_env_and_flag(monkeypatch):
     monkeypatch.setenv("DID_AGENT", "")
     assert resolve_agent(None) == ""
     monkeypatch.setenv("DID_AGENT", "echo hi")
@@ -1146,7 +1165,9 @@ def test_terminal_requires_an_open_project(client):
     assert payload["needs_project"] is True
     assert payload["terms"] == []
     assert payload["agent"] == ""
-    assert payload["presets"][0]["command"] == DEFAULT_AGENT
+    assert [p["command"] for p in payload["presets"]] == [
+        p["command"] for p in local_presets()
+    ]
     status, body = client.post("/api/term/new", {"agent": "echo hi"})
     assert status == 400
     assert "project" in body["error"].lower()

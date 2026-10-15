@@ -47,8 +47,8 @@ gui_cmd = command(
             arg_type=str,
             help=(
                 "Command the Agent pane types into a new terminal "
-                "(default $DID_AGENT, else ocprofile launch local-qw38). "
-                "Empty starts a shell. This does not change the saved OpenCode profile."
+                "(default $DID_AGENT, else opencode when installed). "
+                "Empty starts a shell."
             ),
             sort_key=3,
         ),

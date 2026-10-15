@@ -30,8 +30,9 @@ from .term import Sessions, agent_name, ws_accept
 HERE = Path(__file__).resolve().parent
 DEFAULT_PORT = 8791
 _HEADER = "X-Did"
-# One-shot OpenCode launches. `ocprofile launch` does not rewrite the saved profile.
-LOCAL_PRESETS = (
+# One-shot OpenCode launches through `ocprofile` (it does not rewrite the saved profile).
+# Listed only where ocprofile is installed; elsewhere plain OpenCode, else a shell.
+OCPROFILE_PRESETS = (
     {
         "id": "local-qw38",
         "label": "Local Qwen",
@@ -53,7 +54,23 @@ LOCAL_PRESETS = (
         "command": "ocprofile launch local-qw38-nemo",
     },
 )
-DEFAULT_AGENT = LOCAL_PRESETS[0]["command"]
+OPENCODE_PRESET = {"id": "opencode", "label": "OpenCode", "command": "opencode"}
+
+
+def local_presets() -> tuple[dict, ...]:
+    """The agent pane's list: the ocprofile pairings, else OpenCode, else none (a shell)."""
+    if shutil.which("ocprofile"):
+        return OCPROFILE_PRESETS
+    if shutil.which("opencode"):
+        return (OPENCODE_PRESET,)
+    return ()
+
+
+def default_agent() -> str:
+    presets = local_presets()
+    return presets[0]["command"] if presets else ""
+
+
 VENDOR = {
     "xterm.js": "text/javascript; charset=utf-8",
     "xterm.css": "text/css; charset=utf-8",
@@ -76,13 +93,14 @@ def resolve_agent(agent: str | None = None) -> str:
     """The command typed into a new terminal.
 
     An explicit ``--agent`` wins, then ``$DID_AGENT`` (including empty, for a
-    shell). Otherwise the default is a fully local OpenCode pairing.
+    shell). Otherwise the first of ``local_presets``: a local OpenCode pairing where
+    ocprofile is installed, else OpenCode, else a shell.
     """
     if agent is not None:
         return agent
     if "DID_AGENT" in os.environ:
         return os.environ["DID_AGENT"]
-    return DEFAULT_AGENT
+    return default_agent()
 
 
 def terminal_env(url: str) -> dict:
@@ -400,7 +418,7 @@ class Handler(BaseHTTPRequestHandler):
     stopped = threading.Event()
     protocol_version = "HTTP/1.1"
     token = ""
-    agent = DEFAULT_AGENT
+    agent = ""
     agents: ProjectAgents | None = None
 
     def log_message(self, fmt, *args):
@@ -703,7 +721,7 @@ class Handler(BaseHTTPRequestHandler):
             "terms": terms,
             "token": Handler.token,
             "agent": Handler.agent,
-            "presets": list(LOCAL_PRESETS),
+            "presets": list(local_presets()),
             "needs_project": workdir is None,
             "workdir": str(workdir) if workdir else None,
             "external": external,

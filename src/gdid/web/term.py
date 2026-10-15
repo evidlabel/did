@@ -27,7 +27,7 @@ WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
 def agent_name(command: str) -> str:
-    """Short tab label: ``ocprofile launch local-qw38`` -> ``local-qw38``."""
+    """Short tab label: ``ocprofile launch <profile>`` -> ``<profile>``, else the command's name."""
     words = [
         word
         for word in command.split()

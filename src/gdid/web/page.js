@@ -1716,7 +1716,7 @@ if (typeof document !== "undefined") {
     const command = await new Promise((resolve) => {
       openModal(
         "Add an agent",
-        `<input id="agent-cmd" placeholder="ocprofile launch local-qw38">`,
+        `<input id="agent-cmd" placeholder="opencode">`,
         () => resolve($("agent-cmd").value),
       );
       $("agent-cmd").value = selectedCommand();
