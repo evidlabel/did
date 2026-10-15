@@ -19,6 +19,8 @@ jobs:
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Install poppler (pdftotext, the fallback for broken text layers)
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
       - name: Set up Python 3.12
         run: uv python install 3.12
       - name: Install dependencies
