@@ -1,6 +1,6 @@
 [project]
 name = "did"
-version = "0.3.2"
+version = "0.3.3"
 description = "Local-first CLI and GUI for reviewing and pseudonymizing documents"
 authors = [
     { name = "evidlabel", email = "210122431+evidlabel@users.noreply.github.com" },
